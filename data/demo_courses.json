@@ -1,0 +1,25 @@
+[
+  {
+    "college": "计算机与软件学院",
+    "major": "计算机科学与技术",
+    "degree": "工学学士",
+    "years": 4,
+    "min_years": 3,
+    "max_years": 6,
+    "credit_requirements": {"通识必修": 40, "通识选修": 6, "学科基础": 35, "专业必修": 29, "专业选修": 28, "实践教学": 21.5, "毕业总学分": 159.5},
+    "courses": [
+      {"name":"程序设计基础","credits":4,"platform":"学科基础","category":"学科基础","semester":1,"required":true,"note":""},
+      {"name":"高等数学 A","credits":5,"platform":"学科基础","category":"学科基础","semester":1,"required":true,"note":""},
+      {"name":"大学英语 I","credits":3,"platform":"通识必修","category":"通识必修","semester":1,"required":true,"note":""},
+      {"name":"数据结构","credits":4,"platform":"专业必修","category":"专业必修","semester":3,"required":true,"note":""},
+      {"name":"计算机组成原理","credits":3,"platform":"专业必修","category":"专业必修","semester":3,"required":true,"note":""},
+      {"name":"数据库系统","credits":3,"platform":"专业必修","category":"专业必修","semester":4,"required":true,"note":""},
+      {"name":"操作系统","credits":3,"platform":"专业必修","category":"专业必修","semester":4,"required":true,"note":""},
+      {"name":"人工智能导论","credits":2,"platform":"专业选修","category":"专业选修","semester":4,"required":false,"note":"任选"},
+      {"name":"机器学习","credits":3,"platform":"专业选修","category":"专业选修","semester":5,"required":false,"note":"任选"},
+      {"name":"软件工程","credits":3,"platform":"专业选修","category":"专业选修","semester":5,"required":false,"note":"任选"},
+      {"name":"工程训练","credits":2,"platform":"实践教学","category":"实践教学","semester":2,"required":true,"note":""}
+    ]
+  }
+]
+

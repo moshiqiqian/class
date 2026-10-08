@@ -1,0 +1,8 @@
+计算机科学与技术:
+  - course: 数据库系统
+    prerequisites: [程序设计基础, 数据结构]
+  - course: 操作系统
+    prerequisites: [数据结构, 计算机组成原理]
+  - course: 机器学习
+    prerequisites: [高等数学 A, 程序设计基础]
+
