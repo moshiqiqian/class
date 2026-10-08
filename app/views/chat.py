@@ -73,13 +73,21 @@ def _render_chat(profile: dict, curriculum: dict) -> None:
         visible = messages[-_MAX_VISIBLE:]
         older = messages[:-_MAX_VISIBLE]
 
+    # 计算用户提问的序号（用于「第 N 问」标识）
+    question_number = 0
+    number_map: dict[int, int] = {}
+    for i, m in enumerate(messages):
+        if m["role"] == "user":
+            question_number += 1
+            number_map[i] = question_number
+
     if older:
         with st.expander(f"📜 更早的对话（{len(older)} 条）", expanded=False):
-            for message in older:
-                _render_message(message)
+            for i, message in enumerate(older):
+                _render_message(message, number_map.get(i, 0))
 
-    for message in visible:
-        _render_message(message)
+    for i, message in enumerate(visible, start=len(older)):
+        _render_message(message, number_map.get(i, 0))
 
     if question := st.chat_input("请输入你的问题…"):
         st.session_state.messages.append({"role": "user", "content": question})
@@ -106,9 +114,16 @@ def _render_chat(profile: dict, curriculum: dict) -> None:
                     st.caption(f"来源：第 {citation['page']} 页")
 
 
-def _render_message(message: dict) -> None:
-    with st.chat_message(message["role"]):
-        if message["role"] == "assistant" and message.get("plan"):
+def _render_message(message: dict, index: int = 0) -> None:
+    role = message["role"]
+    # 每条消息前加分隔线 + 角色标签，清晰区分问答
+    if role == "user":
+        st.markdown("---")
+        st.markdown(f"**👤 你（第 {index} 问）**")
+    else:
+        st.markdown(f"**🤖 助手**")
+    with st.chat_message(role):
+        if role == "assistant" and message.get("plan"):
             _render_plan(message["plan"], message.get("intent", "plan"))
         else:
             st.markdown(message["content"])
