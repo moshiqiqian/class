@@ -55,12 +55,31 @@ def _render_chat(profile: dict, curriculum: dict) -> None:
             {"role": "assistant", "content": f"你好！我是 {profile['major']} 培养方案助手。\n\n你可以问我：\n- **学分缺口**：「我还差多少学分」\n- **选课规划**：「怎么规划才能大四前修完」「帮我平均分配课程」\n- **培养方案问答**：「本专业毕业最低学分是多少」"}
         ]
 
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            if message["role"] == "assistant" and message.get("plan"):
-                _render_plan(message["plan"], message.get("intent", "plan"))
-            else:
-                st.markdown(message["content"])
+    messages = st.session_state.messages
+
+    # 清空对话按钮（放在输入框上方右侧）
+    top_col, _ = st.columns([1, 5])
+    with top_col:
+        if len(messages) > 1 and st.button("🗑️ 清空对话", use_container_width=True):
+            st.session_state.messages = [messages[0]]
+            st.rerun()
+
+    # 折叠渲染：只完整展示最近 N 条，更早的收进 expander
+    _MAX_VISIBLE = 4
+    if len(messages) <= _MAX_VISIBLE:
+        visible = messages
+        older = []
+    else:
+        visible = messages[-_MAX_VISIBLE:]
+        older = messages[:-_MAX_VISIBLE]
+
+    if older:
+        with st.expander(f"📜 更早的对话（{len(older)} 条）", expanded=False):
+            for message in older:
+                _render_message(message)
+
+    for message in visible:
+        _render_message(message)
 
     if question := st.chat_input("请输入你的问题…"):
         st.session_state.messages.append({"role": "user", "content": question})
@@ -85,6 +104,14 @@ def _render_chat(profile: dict, curriculum: dict) -> None:
                 st.markdown(answer)
                 for citation in result.get("citations", []):
                     st.caption(f"来源：第 {citation['page']} 页")
+
+
+def _render_message(message: dict) -> None:
+    with st.chat_message(message["role"]):
+        if message["role"] == "assistant" and message.get("plan"):
+            _render_plan(message["plan"], message.get("intent", "plan"))
+        else:
+            st.markdown(message["content"])
 
 
 def _plan_summary(plan: dict, intent: str) -> str:

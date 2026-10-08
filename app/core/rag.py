@@ -36,21 +36,23 @@ def index_documents(pdf_bytes: bytes, filename: str) -> int:
     return len(chunks)
 
 
-def answer(question: str, college: str, major: str) -> tuple[str, list[dict]]:
+def answer(question: str, college: str, major: str, extra_context: str = "") -> tuple[str, list[dict]]:
     from langchain_community.vectorstores import Chroma
     from langchain_openai import ChatOpenAI
 
     if not INDEX_DIR.exists():
         return "尚未建立 RAG 索引。请先在本页建立索引。", []
-    retriever = Chroma(persist_directory=str(INDEX_DIR), embedding_function=_embeddings(), collection_name="curriculum").as_retriever(search_kwargs={"k": 6})
+    retriever = Chroma(persist_directory=str(INDEX_DIR), embedding_function=_embeddings(), collection_name="curriculum").as_retriever(search_kwargs={"k": 8})
     documents = retriever.invoke(question)
-    if not documents:
+    if not documents and not extra_context:
         return "该问题超出当前培养方案资料范围。", []
     key = os.getenv("DEEPSEEK_API_KEY", "")
     citations = [{"page": document.metadata.get("page"), "source": document.metadata.get("source")} for document in documents]
     if not key:
         return "未配置 DEEPSEEK_API_KEY，无法生成基于检索资料的回答。", citations
     context = "\n\n".join(document.page_content for document in documents)
+    if extra_context:
+        context = f"{extra_context}\n\n{context}"
     model = ChatOpenAI(model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"), api_key=key, base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"), temperature=0)
     prompt = (
         f"你是「{college} · {major}」的培养方案问答助手。请依据下列资料，详细、准确地回答学生的问题。\n\n"

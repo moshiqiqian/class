@@ -48,8 +48,25 @@ def _plan_node(state: GraphState) -> dict[str, Any]:
 
 def _answer_node(state: GraphState) -> dict[str, Any]:
     profile = state["profile"]
-    text, citations = answer(state["question"], profile["college"], profile["major"])
+    curriculum = state.get("curriculum") or {}
+    extra = _build_extra_context(curriculum)
+    text, citations = answer(state["question"], profile["college"], profile["major"], extra_context=extra)
     return {"answer": text, "citations": citations}
+
+
+def _build_extra_context(curriculum: dict) -> str:
+    """把结构化解析出的学分要求等信息拼成文本，注入问答上下文。
+
+    这些数据在 PDF 中是复杂表格，向量检索容易漏检或切碎，直接注入最可靠。
+    """
+    parts = []
+    requirements = curriculum.get("credit_requirements") or {}
+    if requirements:
+        lines = ["本专业各课程平台毕业学分要求："]
+        for platform, credits in requirements.items():
+            lines.append(f"- {platform}：{credits} 学分")
+        parts.append("\n".join(lines))
+    return "\n".join(parts)
 
 
 def build_graph():
