@@ -75,20 +75,27 @@ def _render_workspace_switcher() -> None:
         # 切换工作区：重新加载 catalog + 绑定的学生画像
         ws = get_workspace(selected)
         if ws:
-            try:
-                catalog = load_catalog_by_cache(ws["cache_file"])
-                st.session_state.parsed_catalog = catalog
-                st.session_state.parsed = True
-                st.session_state.curriculum_pdf_name = ws.get("pdf_name", "")
+            st.session_state.current_workspace = selected
+            st.session_state.profile = ws.get("profile")
+            st.session_state.credits_confirmed = bool(ws.get("profile"))
+            st.session_state.transcript_records = []
+            st.session_state.messages = []
+            if ws.get("cache_file"):
+                try:
+                    catalog = load_catalog_by_cache(ws["cache_file"])
+                    st.session_state.parsed_catalog = catalog
+                    st.session_state.parsed = True
+                    st.session_state.curriculum_pdf_name = ws.get("pdf_name", "")
+                    st.session_state.curriculum_pdf_bytes = None
+                except FileNotFoundError:
+                    st.session_state.parsed = False
+                    st.session_state.parsed_catalog = []
+            else:
+                # 空工作区（未绑定方案）
+                st.session_state.parsed = False
+                st.session_state.parsed_catalog = []
                 st.session_state.curriculum_pdf_bytes = None
-                st.session_state.current_workspace = selected
-                st.session_state.profile = ws.get("profile")
-                st.session_state.credits_confirmed = bool(ws.get("profile"))
-                st.session_state.transcript_records = []
-                st.session_state.messages = []
-                st.rerun()
-            except FileNotFoundError:
-                st.error("该工作区缓存缺失。")
+            st.rerun()
 
 
 def _render_chat(profile: dict, curriculum: dict) -> None:

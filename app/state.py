@@ -29,6 +29,7 @@ DEFAULTS: dict[str, object] = {
     "current_workspace": "",             # 当前工作区名称
     "workspace_panel": False,            # 工作区管理面板是否打开
     "new_workspace": False,              # 新建工作区弹窗是否打开
+    "new_ws_dialog": False,              # 新建工作区对话框
 }
 
 

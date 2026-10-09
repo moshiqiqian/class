@@ -34,10 +34,10 @@ def name_exists(name: str) -> bool:
     return any(w["name"] == name for w in _load())
 
 
-def create_workspace(name: str, pdf_name: str, cache_file: str) -> dict:
-    """新建工作区。返回创建的工作区。
+def create_workspace(name: str) -> dict:
+    """创建「空工作区」（仅名称，尚未绑定方案）。返回创建的工作区。
 
-    重名时自动追加序号。profile 初始为 None（学生信息待填写）。
+    重名时自动追加序号。
     """
     workspaces = _load()
     base = name
@@ -48,14 +48,25 @@ def create_workspace(name: str, pdf_name: str, cache_file: str) -> dict:
         counter += 1
     workspace = {
         "name": name,
-        "pdf_name": pdf_name,
-        "cache_file": cache_file,
+        "pdf_name": None,      # 未上传方案
+        "cache_file": None,    # 未绑定解析缓存
+        "profile": None,       # 学生画像（待填写）
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "profile": None,  # 学生画像，与工作区绑定
     }
     workspaces.append(workspace)
     _save(workspaces)
     return workspace
+
+
+def bind_pdf(workspace_name: str, pdf_name: str, cache_file: str) -> None:
+    """把解析好的方案（PDF + 缓存）绑定到工作区。"""
+    workspaces = _load()
+    for w in workspaces:
+        if w["name"] == workspace_name:
+            w["pdf_name"] = pdf_name
+            w["cache_file"] = cache_file
+            break
+    _save(workspaces)
 
 
 def save_profile(workspace_name: str, profile: dict) -> None:
