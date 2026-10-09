@@ -122,7 +122,9 @@ def _plan_node(state: GraphState) -> dict[str, Any]:
         plan = build_career_plan(profile, curriculum)
     else:
         plan = build_plan(profile, curriculum, advice, mode=mode)
-    plan["suggestion"] = _generate_plan_suggestion(profile, plan)
+    # gap 意图只答缺口，不生成规划建议
+    if state.get("intent") != "gap":
+        plan["suggestion"] = _generate_plan_suggestion(profile, plan)
     return {"plan_result": plan}
 
 

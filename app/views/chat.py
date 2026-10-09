@@ -168,6 +168,17 @@ def _render_plan(plan: dict, intent: str) -> None:
     for warning in plan.get("warnings", []):
         st.warning(warning)
 
+    # 学分缺口（gap 意图）：只回答缺口，不展示规划建议
+    if intent == "gap":
+        st.markdown("**学分缺口统计**")
+        gap_rows = []
+        for name, row in plan.get("gap", {}).items():
+            gap_rows.append({"平台": name, "要求": row["required"], "已获": row["earned"], "缺口": row["missing"]})
+        st.dataframe(pd.DataFrame(gap_rows), use_container_width=True)
+        total_missing = sum(r["缺口"] for r in gap_rows)
+        st.caption(f"总计缺口：**{total_missing:.1f}** 学分")
+        return
+
     # LLM 生成的实质建议（最上方展示）
     if plan.get("suggestion"):
         st.markdown(plan["suggestion"])
@@ -187,16 +198,12 @@ def _render_plan(plan: dict, intent: str) -> None:
         _render_career_plan(plan)
         return
 
-    # 学分缺口（普通规划展示）
+    # 普通规划：学分缺口
     st.markdown("**学分缺口统计**")
     gap_rows = []
     for name, row in plan["gap"].items():
         gap_rows.append({"平台": name, "要求": row["required"], "已获": row["earned"], "缺口": row["missing"]})
     st.dataframe(pd.DataFrame(gap_rows), use_container_width=True)
-
-    # gap 意图：只回答缺口
-    if intent == "gap":
-        return
 
     # 下学期清单
     st.markdown("**下学期选课清单**")
