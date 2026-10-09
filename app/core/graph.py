@@ -30,19 +30,23 @@ class GraphState(TypedDict, total=False):
 # 意图分类：LLM 输出结构化 JSON
 _INTENT_PROMPT = (
     "判断学生问题属于哪一类，并判断规划模式。只输出 JSON，不要输出其他内容：\n"
-    '{{"intent": "plan|gap|review|missing|semester_plan|qa", "mode": "early|balanced|original|none", "target_semester": 0}}\n\n'
+    '{{"intent": "plan|gap|review|missing|semester_plan|qa", "mode": "early|balanced|career|original", "target_semester": 0}}\n\n'
     "分类规则：\n"
-    "- plan：选课规划（问「下学期选什么课」「怎么规划课程」「提前修完」「平均分配」；若问「整个大学生涯/大一到大四/全程/大学四年怎么规划」则 mode=career）\n"
+    "- plan：选课规划（问「下学期选什么课」「怎么规划课程」「提前修完」「平均分配」）\n"
     "- semester_plan：为「某一个具体学期」规划课程（问「帮我规划第3学期」「重新规划第1学期」「第5学期该修什么」），target_semester 填该学期号(1-8)\n"
     "- gap：学分缺口（问「还差多少学分」「学分够不够毕业」）\n"
     "- review：查询「我自己」的成绩/绩点/已修课程（问「我绩点多少」「我学过哪些课」）\n"
     "- missing：查询缺失哪些学期的成绩单（问「缺哪几个学期」）\n"
     "- qa：其他所有培养方案知识问答（培养目标、毕业要求、某课程学分/学期/考核、核心课程、学制、学位等）\n\n"
+    "mode（当 intent=plan 时）：\n"
+    "- career：要求「整个大学生涯/大一到大四/大学四年/全程/完整」的整体规划（从头到尾排满 8 个学期）\n"
+    "- early：提到提前修完/大四前修完\n"
+    "- balanced：提到平均分配/均衡安排\n"
+    "- original：按培养方案原始安排\n\n"
     "重要：\n"
-    "- 提到具体学期号（如第1学期、大二上）并要求规划 → semester_plan，target_semester=学期号\n"
-    "- 问「某门课的学分/开课学期/内容」→ qa\n"
-    "- 拿不准时选 qa\n\n"
-    "mode 仅当 intent=plan 时有意义：early=提前修完, balanced=平均分配, career=整个大学生涯全程规划(大一到大四), original=原始安排\n\n"
+    "- 只要在问「整个大学/大一到大四/大学四年/全程」怎么规划 → intent=plan, mode=career\n"
+    "- 提到具体学期号（如第1学期、大二上）并要求规划 → semester_plan\n"
+    "- 拿不准时 intent=qa\n\n"
     "问题：{question}\n"
     "JSON："
 )
@@ -76,54 +80,22 @@ def _extract_semester(question: str) -> int:
 
 
 def _classify_intent(question: str) -> tuple[str, str, int]:
-    """用 LLM 分类意图 + 规划模式 + 目标学期；失败回退关键词。"""
-    key = os.getenv("DEEPSEEK_API_KEY", "")
-    if key:
-        try:
-            raw = _llm().invoke(_INTENT_PROMPT.format(question=question)).content.strip()
-            parsed = _parse_intent_json(raw)
-            if parsed:
-                intent = parsed.get("intent", "qa")
-                if intent not in ("plan", "gap", "review", "missing", "semester_plan", "qa"):
-                    intent = "qa"
-                mode = parsed.get("mode", "balanced")
-                if mode not in ("early", "balanced", "original"):
-                    mode = "balanced"
-                target = int(parsed.get("target_semester", 0) or 0)
-                # semester_plan 必须有学期号，否则回退正则提取
-                if intent == "semester_plan" and target not in range(1, 9):
-                    target = _extract_semester(question)
-                    if target == 0:
-                        intent = "plan"
-                # plan 模式二次校正：提到全程/大一到大四/四年，强制 career
-                if intent == "plan" and any(w in question for w in ("整个大学", "全程", "大一到大四", "生涯", "全部重新规划", "大学四年", "四年")):
-                    mode = "career"
-                return intent, mode, target
-        except Exception:
-            pass  # 回退关键词
-
-    # 关键词兜底（注意顺序：missing 优先于 gap）
-    if any(word in question for word in _MISSING_KEYWORDS):
-        return "missing", "balanced", 0
-    if any(word in question for word in _GAP_KEYWORDS):
-        return "gap", "balanced", 0
-    if any(word in question for word in _REVIEW_KEYWORDS):
-        return "review", "balanced", 0
-    # 指定学期的规划
-    if ("规划" in question or "重新规划" in question or "该修" in question) and _extract_semester(question):
-        return "semester_plan", "balanced", _extract_semester(question)
-    if any(word in question for word in _PLAN_MODE_KEYWORDS):
-        # career 优先：提到全程/大一到大四/全部重新规划
-        if any(w in question for w in ("整个大学", "全程", "大一到大四", "生涯", "全部重新规划", "四年")):
-            return "plan", "career", 0
-        if "提前" in question or "大四前" in question:
-            return "plan", "early", 0
-        if "平均" in question or "均衡" in question:
-            return "plan", "balanced", 0
-        return "plan", "original", 0
-    if any(word in question for word in _PLAN_KEYWORDS):
-        return "plan", "balanced", 0
-    return "qa", "balanced", 0
+    """完全由 LLM 分类意图 + 规划模式 + 目标学期（不使用关键词）。"""
+    raw = _llm().invoke(_INTENT_PROMPT.format(question=question)).content.strip()
+    parsed = _parse_intent_json(raw) or {}
+    intent = parsed.get("intent", "qa")
+    if intent not in ("plan", "gap", "review", "missing", "semester_plan", "qa"):
+        intent = "qa"
+    mode = parsed.get("mode", "balanced")
+    if mode not in ("early", "balanced", "career", "original"):
+        mode = "balanced"
+    target = int(parsed.get("target_semester", 0) or 0)
+    # semester_plan 必须带合法学期号，否则降级为普通规划
+    if intent == "semester_plan" and target not in range(1, 9):
+        target = _extract_semester(question)
+        if target == 0:
+            intent = "plan"
+    return intent, mode, target
 
 
 def _parse_intent_json(raw: str) -> dict | None:

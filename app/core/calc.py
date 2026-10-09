@@ -336,25 +336,24 @@ def build_career_plan(profile: dict, curriculum: dict) -> dict:
     """全大学生涯整体规划（第 1 至第 8 学期全覆盖）。
 
     规则：
-    - 必修课：全部必须修读，按培养方案原始开课学期安排（未修的）。
-    - 选修课：只需修够各平台要求的选修学分，不必全修；按下述约束挑选。
-    - 每学期有学分上限（总学分、选修学分），超出则顺延到后续学期。
+    - 忽略学生当前进度，当作大一新生，完整规划培养方案全部课程。
+    - 必修课：全部必须修读，按培养方案原始开课学期安排。
+    - 选修课：只需修够各平台要求的选修学分，不必全修。
+    - 每学期有学分上限（总学分、选修学分），超出则顺延。
     """
-    current = int(profile.get("current_semester", 1))
-    completed = set(profile.get("completed_courses", []))
     requirements = curriculum.get("credit_requirements", {})
-    earned = profile.get("completed_credits", {})
 
     courses = curriculum.get("courses", [])
-    required_courses = [c for c in courses if c.get("required", True) and c["name"] not in completed]
-    elective_courses = [c for c in courses if not c.get("required", True) and c["name"] not in completed]
+    # 生涯规划：忽略学生当前进度，当作全新生，完整规划培养方案的全部课程
+    required_courses = [c for c in courses if c.get("required", True)]
+    elective_courses = [c for c in courses if not c.get("required", True)]
 
-    # 各平台选修缺口（只修够即可）
+    # 各平台选修要求（按培养方案完整要求，不扣减已修）
     elective_gap = {}
     for platform, req in requirements.items():
         if platform == "毕业总学分" or "选修" not in platform:
             continue
-        elective_gap[platform] = max(0.0, float(req) - float(earned.get(platform, 0)))
+        elective_gap[platform] = float(req)
 
     timeline: dict[int, list[dict]] = {s: [] for s in range(1, 9)}
     # 每学期已用学分
@@ -404,14 +403,13 @@ def build_career_plan(profile: dict, curriculum: dict) -> dict:
             continue
         result_timeline[t] = rows
 
-    gap = calculate_gap(requirements, earned)
     return {
         "mode": "career",
         "timeline": result_timeline,
-        "gap": gap,
+        "gap": {k: {"required": v, "earned": 0, "missing": v} for k, v in requirements.items() if k != "毕业总学分"},
         "total_required": requirements.get("毕业总学分"),
-        "total_earned": sum(float(v) for v in earned.values()),
-        "warnings": [f"缺少第 {', '.join(map(str, profile['missing_semesters']))} 学期成绩单，缺口可能偏大。"] if profile.get("missing_semesters") else [],
+        "total_earned": 0,
+        "warnings": [],
         "max_credits_per_semester": MAX_CREDITS_PER_SEMESTER,
         "max_elective_per_semester": MAX_ELECTIVE_CREDITS_PER_SEMESTER,
     }
