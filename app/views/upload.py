@@ -111,33 +111,11 @@ def _render_create_dialog() -> None:
 
 
 def _activate_by_name(name: str) -> None:
-    """切换到已有工作区。加载 catalog + 绑定的学生画像。"""
-    ws = get_workspace(name)
-    if not ws:
-        return
-    st.session_state.current_workspace = name
-    st.session_state.profile = ws.get("profile")
-    st.session_state.credits_confirmed = bool(ws.get("profile"))
-    st.session_state.transcript_records = []
-    st.session_state.messages = []
-    if ws.get("cache_file"):
-        try:
-            catalog = load_catalog_by_cache(ws["cache_file"])
-            st.session_state.parsed_catalog = catalog
-            st.session_state.parsed = True
-            st.session_state.curriculum_pdf_name = ws.get("pdf_name", "")
-            st.session_state.curriculum_pdf_bytes = None
-        except FileNotFoundError:
-            st.session_state.parsed = False
-            st.session_state.parsed_catalog = []
-    else:
-        st.session_state.parsed = False
-        st.session_state.parsed_catalog = []
-        st.session_state.curriculum_pdf_bytes = None
-        st.session_state.curriculum_pdf_name = None
-    st.session_state.index_ready = False
-    reset_after(1)
-    st.rerun()
+    """切换到已有工作区：完整重载（方案+学生+成绩单），并 rerun 重新渲染。"""
+    from app.core.workspace import load_into_session
+    if load_into_session(name):
+        _warmup_models()
+        st.rerun()
 
 
 def _render_upload(ws: dict | None) -> None:

@@ -79,6 +79,16 @@ def save_profile(workspace_name: str, profile: dict) -> None:
     _save(workspaces)
 
 
+def save_transcripts(workspace_name: str, records: list[dict]) -> None:
+    """把成绩单记录保存到工作区（切换工作区时保留，无需重新上传）。"""
+    workspaces = _load()
+    for w in workspaces:
+        if w["name"] == workspace_name:
+            w["transcripts"] = records
+            break
+    _save(workspaces)
+
+
 def delete_workspace_by_name(name: str) -> None:
     """按名称删除工作区。"""
     workspaces = _load()
@@ -94,3 +104,48 @@ def find_cache_file(pdf_bytes: bytes) -> str:
     if path.exists():
         return path.name
     return ""
+
+
+def load_into_session(name: str) -> bool:
+    """把指定工作区的全部状态加载进 session_state（切换工作区=完整重载）。
+
+    加载：方案(parsed_catalog) + 学生画像(profile) + 成绩单(transcript_records)。
+    返回是否成功。由 upload.py / chat.py 共用，保证切换行为一致、无残留。
+    """
+    import streamlit as st
+    from app.core.extract_courses import load_catalog_by_cache
+
+    ws = get_workspace(name)
+    if not ws:
+        return False
+
+    # 1. 清空所有与工作区相关的旧状态（避免上一个工作区的残留）
+    st.session_state.messages = []
+    st.session_state.parsed = False
+    st.session_state.parsed_catalog = []
+    st.session_state.curriculum_pdf_bytes = None
+    st.session_state.curriculum_pdf_name = None
+    st.session_state.profile = None
+    st.session_state.credits_confirmed = False
+    st.session_state.transcript_records = []
+    st.session_state.manual_credits = {}
+    st.session_state.index_ready = False
+
+    # 2. 加载方案
+    if ws.get("cache_file"):
+        try:
+            st.session_state.parsed_catalog = load_catalog_by_cache(ws["cache_file"])
+            st.session_state.parsed = True
+            st.session_state.curriculum_pdf_name = ws.get("pdf_name", "")
+        except FileNotFoundError:
+            pass
+
+    # 3. 加载学生画像
+    st.session_state.profile = ws.get("profile")
+    st.session_state.credits_confirmed = bool(ws.get("profile"))
+
+    # 4. 加载成绩单记录（切换工作区后无需重新上传）
+    st.session_state.transcript_records = ws.get("transcripts", [])
+
+    st.session_state.current_workspace = name
+    return True

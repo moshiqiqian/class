@@ -72,29 +72,9 @@ def _render_workspace_switcher() -> None:
             st.rerun()
 
     if selected != current:
-        # 切换工作区：重新加载 catalog + 绑定的学生画像
-        ws = get_workspace(selected)
-        if ws:
-            st.session_state.current_workspace = selected
-            st.session_state.profile = ws.get("profile")
-            st.session_state.credits_confirmed = bool(ws.get("profile"))
-            st.session_state.transcript_records = []
-            st.session_state.messages = []
-            if ws.get("cache_file"):
-                try:
-                    catalog = load_catalog_by_cache(ws["cache_file"])
-                    st.session_state.parsed_catalog = catalog
-                    st.session_state.parsed = True
-                    st.session_state.curriculum_pdf_name = ws.get("pdf_name", "")
-                    st.session_state.curriculum_pdf_bytes = None
-                except FileNotFoundError:
-                    st.session_state.parsed = False
-                    st.session_state.parsed_catalog = []
-            else:
-                # 空工作区（未绑定方案）
-                st.session_state.parsed = False
-                st.session_state.parsed_catalog = []
-                st.session_state.curriculum_pdf_bytes = None
+        # 切换工作区：完整重载（方案+学生+成绩单），rerun 重新渲染
+        from app.core.workspace import load_into_session
+        if load_into_session(selected):
             st.rerun()
 
 
@@ -233,7 +213,7 @@ def _render_plan(plan: dict, intent: str) -> None:
 
 
 def _render_review(review: dict) -> None:
-    """回顾：绩点 + 已修课程（分学期）+ 学分进度。"""
+    """总览：绩点 + 学分进度 + 各学期绩点一览（详细课程请去「成绩信息」页查看）。"""
     if review.get("gpa"):
         col1, col2 = st.columns(2)
         with col1:
@@ -245,30 +225,20 @@ def _render_review(review: dict) -> None:
         st.progress(min(1.0, review["total_earned"] / review["total_required"]))
         st.caption(f"学分进度：{review['total_earned']} / {review['total_required']}")
 
-    # 已修课程分学期展示（用成绩单记录）
+    # 各学期绩点总览（不展开每学期的课程明细）
     records = st.session_state.get("transcript_records", [])
     if records:
         by_sem = gpa_by_semester(records)
         if by_sem:
-            st.markdown("**已修课程（分学期）**")
-            for sem, info in by_sem.items():
-                st.markdown(f"*第 {sem} 学期* · 平均绩点 {info['gpa']} · {len(info['courses'])} 门课")
-                st.dataframe(pd.DataFrame([{
-                    "课程名称": r["course"], "成绩": r["score"], "学分": r["credits"]
-                } for r in info["courses"]]), use_container_width=True)
-        else:
-            _render_plain_courses(review)
-    elif review.get("completed_courses"):
-        st.markdown("**已修课程**")
-        st.dataframe(pd.DataFrame(review["completed_courses"]), use_container_width=True)
+            st.markdown("**各学期绩点一览**")
+            overview = pd.DataFrame([
+                {"学期": f"第 {s} 学期", "平均绩点": v["gpa"], "学分": v["total_credits"], "课程数": len(v["courses"])}
+                for s, v in by_sem.items()
+            ])
+            st.dataframe(overview, use_container_width=True)
+            st.caption("查看某学期详细课程，请切换到「📊 成绩信息」页。")
     else:
-        st.info("暂无已修课程记录。请先在「过往学分」步骤上传成绩单。")
-
-
-def _render_plain_courses(review: dict) -> None:
-    if review.get("completed_courses"):
-        st.markdown("**已修课程**")
-        st.dataframe(pd.DataFrame(review["completed_courses"]), use_container_width=True)
+        st.info("暂无成绩单数据。请先在「过往学分」步骤上传成绩单。")
 
 
 def _render_grades() -> None:
