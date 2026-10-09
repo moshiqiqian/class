@@ -20,6 +20,7 @@ class GraphState(TypedDict, total=False):
     curriculum: dict
     intent: str
     mode: str
+    target_semester: int
     answer: str
     citations: list[dict]
     plan_result: dict
@@ -29,17 +30,17 @@ class GraphState(TypedDict, total=False):
 # 意图分类：LLM 输出结构化 JSON
 _INTENT_PROMPT = (
     "判断学生问题属于哪一类，并判断规划模式。只输出 JSON，不要输出其他内容：\n"
-    '{{"intent": "plan|gap|review|missing|qa", "mode": "early|balanced|original|none"}}\n\n'
+    '{{"intent": "plan|gap|review|missing|semester_plan|qa", "mode": "early|balanced|original|none", "target_semester": 0}}\n\n'
     "分类规则：\n"
-    "- plan：选课规划（问「下学期选什么课」「怎么规划课程」「课程怎么安排」「提前修完」「平均分配」）\n"
+    "- plan：笼统的选课规划（问「下学期选什么课」「怎么规划课程」「提前修完」「平均分配」，未指定具体学期）\n"
+    "- semester_plan：为「某一个具体学期」规划课程（问「帮我规划第3学期」「重新规划第1学期」「第5学期该修什么」），target_semester 填该学期号(1-8)\n"
     "- gap：学分缺口（问「还差多少学分」「学分够不够毕业」）\n"
-    "- review：查询「我自己」的成绩/绩点/已修课程（问「我绩点多少」「我学过哪些课」「我的成绩单」）\n"
+    "- review：查询「我自己」的成绩/绩点/已修课程（问「我绩点多少」「我学过哪些课」）\n"
     "- missing：查询缺失哪些学期的成绩单（问「缺哪几个学期」）\n"
-    "- qa：其他所有培养方案知识问答（培养目标、毕业要求、某课程学分/学期/考核、核心课程、学制、学位、专业介绍等）\n\n"
-    "重要区分：\n"
-    "- 问「某门课的学分/开课学期/课程内容」→ qa（不是 review）\n"
-    "- 问「我的成绩/我的绩点/我学过什么」→ review\n"
-    "- 问「培养方案里对成绩/考核的要求」→ qa\n"
+    "- qa：其他所有培养方案知识问答（培养目标、毕业要求、某课程学分/学期/考核、核心课程、学制、学位等）\n\n"
+    "重要：\n"
+    "- 提到具体学期号（如第1学期、大二上）并要求规划 → semester_plan，target_semester=学期号\n"
+    "- 问「某门课的学分/开课学期/内容」→ qa\n"
     "- 拿不准时选 qa\n\n"
     "mode 仅当 intent=plan 时有意义：early=提前修完, balanced=平均分配, original=原始安排\n\n"
     "问题：{question}\n"
@@ -56,12 +57,26 @@ _PLAN_KEYWORDS = ("下学期选什么课", "选什么课", "选课", "课程安�
 
 def _classify(state: GraphState) -> dict[str, str]:
     question = state.get("question", "")
-    intent, mode = _classify_intent(question)
-    return {"intent": intent, "mode": mode}
+    intent, mode, target = _classify_intent(question)
+    return {"intent": intent, "mode": mode, "target_semester": target}
 
 
-def _classify_intent(question: str) -> tuple[str, str]:
-    """用 LLM 分类意图 + 规划模式；失败回退关键词。返回 (intent, mode)。"""
+def _extract_semester(question: str) -> int:
+    """从问题里提取学期号（「第3学期」「大三上」等），失败返回 0。"""
+    m = re.search(r"第\s*([1-8])\s*学期", question)
+    if m:
+        return int(m.group(1))
+    # 大一上=1 大一下=2 大二上=3 ... 大四上=7 大四下=8
+    grade_map = {"一": 1, "二": 2, "三": 3, "四": 4}
+    g = re.search(r"大([一二三四])([上下])", question)
+    if g:
+        base = (grade_map[g.group(1)] - 1) * 2
+        return base + (1 if g.group(2) == "上" else 2)
+    return 0
+
+
+def _classify_intent(question: str) -> tuple[str, str, int]:
+    """用 LLM 分类意图 + 规划模式 + 目标学期；失败回退关键词。"""
     key = os.getenv("DEEPSEEK_API_KEY", "")
     if key:
         try:
@@ -69,31 +84,40 @@ def _classify_intent(question: str) -> tuple[str, str]:
             parsed = _parse_intent_json(raw)
             if parsed:
                 intent = parsed.get("intent", "qa")
-                if intent not in ("plan", "gap", "review", "missing", "qa"):
+                if intent not in ("plan", "gap", "review", "missing", "semester_plan", "qa"):
                     intent = "qa"
                 mode = parsed.get("mode", "balanced")
                 if mode not in ("early", "balanced", "original"):
                     mode = "balanced"
-                return intent, mode
+                target = int(parsed.get("target_semester", 0) or 0)
+                # semester_plan 必须有学期号，否则回退正则提取
+                if intent == "semester_plan" and target not in range(1, 9):
+                    target = _extract_semester(question)
+                    if target == 0:
+                        intent = "plan"
+                return intent, mode, target
         except Exception:
             pass  # 回退关键词
 
-    # 关键词兜底（注意顺序：missing 优先于 gap，因为「缺少」比「还差」更具体）
+    # 关键词兜底（注意顺序：missing 优先于 gap）
     if any(word in question for word in _MISSING_KEYWORDS):
-        return "missing", "balanced"
+        return "missing", "balanced", 0
     if any(word in question for word in _GAP_KEYWORDS):
-        return "gap", "balanced"
+        return "gap", "balanced", 0
     if any(word in question for word in _REVIEW_KEYWORDS):
-        return "review", "balanced"
+        return "review", "balanced", 0
+    # 指定学期的规划
+    if ("规划" in question or "重新规划" in question or "该修" in question) and _extract_semester(question):
+        return "semester_plan", "balanced", _extract_semester(question)
     if any(word in question for word in _PLAN_MODE_KEYWORDS):
         if "提前" in question or "大四前" in question:
-            return "plan", "early"
+            return "plan", "early", 0
         if "平均" in question or "均衡" in question:
-            return "plan", "balanced"
-        return "plan", "original"
+            return "plan", "balanced", 0
+        return "plan", "original", 0
     if any(word in question for word in _PLAN_KEYWORDS):
-        return "plan", "balanced"
-    return "qa", "balanced"
+        return "plan", "balanced", 0
+    return "qa", "balanced", 0
 
 
 def _parse_intent_json(raw: str) -> dict | None:
@@ -119,6 +143,38 @@ def _plan_node(state: GraphState) -> dict[str, Any]:
     # 基于结构化结果，让 LLM 生成自然语言建议
     plan["suggestion"] = _generate_plan_suggestion(profile, plan)
     return {"plan_result": plan}
+
+
+def _semester_plan_node(state: GraphState) -> dict[str, Any]:
+    """为指定学期（含历史学期）重新规划课程。"""
+    from app.core.calc import build_semester_plan
+    profile, curriculum = state["profile"], state["curriculum"]
+    target = int(state.get("target_semester", 0) or 0)
+    if target not in range(1, 9):
+        # 兜底：转成普通规划
+        return _plan_node(state)
+    plan = build_semester_plan(profile, curriculum, target)
+    plan["suggestion"] = _generate_semester_suggestion(profile, plan)
+    return {"plan_result": plan}
+
+
+def _generate_semester_suggestion(profile: dict, plan: dict) -> str:
+    """为指定学期规划生成建议。"""
+    key = os.getenv("DEEPSEEK_API_KEY", "")
+    if not key:
+        return ""
+    try:
+        target = plan["target_semester"]
+        courses = "、".join(f"{c['课程名称']}({c['状态']})" for c in plan["courses"])
+        prompt = (
+            f"你是培养方案选课顾问。学生希望重新规划「第 {target} 学期」。\n"
+            f"该学期培养方案课程：{courses or '无'}。\n"
+            f"共 {plan['course_count']} 门课、{plan['total_credits']} 学分。\n"
+            "请用 2~3 句话给出该学期的选课建议，指出哪些需优先补修、如何安排节奏。"
+        )
+        return _llm().invoke(prompt).content.strip()
+    except Exception:
+        return ""
 
 
 def _generate_plan_suggestion(profile: dict, plan: dict) -> str:
@@ -255,6 +311,7 @@ def build_graph():
 
     workflow.add_node("classify", _classify)
     workflow.add_node("plan", _plan_node)
+    workflow.add_node("semester_plan", _semester_plan_node)
     workflow.add_node("missing", _missing_node)
     workflow.add_node("answer", _answer_node)
 
@@ -263,9 +320,10 @@ def build_graph():
     workflow.add_conditional_edges(
         "classify",
         lambda state: state["intent"],
-        {"plan": "plan", "gap": "plan", "review": "answer", "missing": "missing", "qa": "answer"},
+        {"plan": "plan", "gap": "plan", "semester_plan": "semester_plan", "review": "answer", "missing": "missing", "qa": "answer"},
     )
     workflow.add_edge("plan", END)
+    workflow.add_edge("semester_plan", END)
     workflow.add_edge("missing", END)
     workflow.add_edge("answer", END)
 

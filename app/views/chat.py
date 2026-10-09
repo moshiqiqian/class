@@ -158,14 +158,24 @@ def _plan_summary(plan: dict, intent: str) -> str:
 
 
 def _render_plan(plan: dict, intent: str) -> None:
-    for warning in plan["warnings"]:
+    for warning in plan.get("warnings", []):
         st.warning(warning)
 
     # LLM 生成的实质建议（最上方展示）
     if plan.get("suggestion"):
         st.markdown(plan["suggestion"])
 
-    # 学分缺口（规划类都展示）
+    # 指定学期规划（semester_plan）
+    if "target_semester" in plan:
+        target = plan["target_semester"]
+        st.markdown(f"**第 {target} 学期规划**（{plan['course_count']} 门课，共 {plan['total_credits']} 学分）")
+        if plan["courses"]:
+            st.dataframe(pd.DataFrame(plan["courses"]), use_container_width=True)
+        else:
+            st.info(f"第 {target} 学期培养方案无课程安排。")
+        return
+
+    # 学分缺口（普通规划展示）
     st.markdown("**学分缺口统计**")
     gap_rows = []
     for name, row in plan["gap"].items():

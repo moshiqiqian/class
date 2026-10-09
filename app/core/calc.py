@@ -287,3 +287,41 @@ def _course_row(course: dict) -> dict:
         "原始学期": f"第 {course.get('semester', 0)} 学期",
         "性质": "必修" if course.get("required", True) else "选修",
     }
+
+
+def build_semester_plan(profile: dict, curriculum: dict, target_semester: int) -> dict:
+    """为指定学期（含历史学期）重新规划课程。
+
+    列出该学期培养方案应修的课程，并对比学生实际修读情况，
+    标记「已修 / 建议补修 / 建议修读」。
+    """
+    completed = set(profile.get("completed_courses", []))
+    courses = [c for c in curriculum.get("courses", []) if int(c.get("semester", 0)) == int(target_semester)]
+
+    rows = []
+    for c in courses:
+        row = _course_row(c)
+        if c["name"] in completed:
+            row["状态"] = "✅ 已修"
+        elif int(c.get("semester", 0)) < profile.get("current_semester", 1):
+            row["状态"] = "⚠️ 未修（建议补修）"
+        else:
+            row["状态"] = "建议修读"
+        rows.append(row)
+
+    # 必修在前
+    rows.sort(key=lambda r: (r["性质"] != "必修", r["课程名称"]))
+    total = sum(r["学分"] for r in rows)
+    required_total = sum(r["学分"] for r in rows if r["性质"] == "必修")
+
+    return {
+        "target_semester": int(target_semester),
+        "courses": rows,
+        "total_credits": round(total, 1),
+        "required_credits": round(required_total, 1),
+        "course_count": len(rows),
+        "gap": calculate_gap(curriculum.get("credit_requirements", {}), profile.get("completed_credits", {})),
+        "total_required": curriculum.get("credit_requirements", {}).get("毕业总学分"),
+        "total_earned": sum(float(v) for v in profile.get("completed_credits", {}).values()),
+        "warnings": [],
+    }
