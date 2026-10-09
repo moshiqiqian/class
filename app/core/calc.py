@@ -209,6 +209,12 @@ def build_plan(profile: dict, curriculum: dict, advice: dict[str, str] | None = 
 
     warnings = [f"缺少第 {', '.join(map(str, profile['missing_semesters']))} 学期成绩单，学分缺口可能偏大。"] if profile.get("missing_semesters") else []
 
+    # 历史学期（已修课程按学期分组，用于「规划/回顾之前学期」）
+    history: dict[int, list[dict]] = {}
+    for row in completed_courses:
+        term = int(row.get("原始学期", "第 0").replace("第 ", "").replace(" 学期", "") or 0)
+        history.setdefault(term, []).append(row)
+
     return {
         "mode": mode,
         "gap": gap,
@@ -219,6 +225,7 @@ def build_plan(profile: dict, curriculum: dict, advice: dict[str, str] | None = 
         "total_required": total_required,
         "total_earned": total_earned,
         "completed_courses": completed_courses,   # 已修课程（用于回顾）
+        "history": dict(sorted(history.items())), # 历史学期分组
         "current_semester": current,
     }
 
@@ -254,6 +261,14 @@ def _schedule(courses: list[dict], current_semester: int, mode: str) -> dict[int
     required = [c for c in courses if c.get("required", True)]
     electives = [c for c in courses if not c.get("required", True)]
     ordered = sorted(required, key=lambda c: int(c.get("semester", 0))) + sorted(electives, key=lambda c: int(c.get("semester", 0)))
+
+    # 无剩余学期（已到第 8 学期及以后）：按课程原始学期归位，避免除零
+    if not remaining_terms:
+        timeline: dict[int, list[dict]] = {}
+        for course in ordered:
+            term = int(course.get("semester", 8))
+            timeline.setdefault(term, []).append(_course_row(course))
+        return dict(sorted(timeline.items()))
 
     # 平均分配到各剩余学期
     n_terms = len(remaining_terms)

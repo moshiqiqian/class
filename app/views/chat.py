@@ -191,10 +191,19 @@ def _render_plan(plan: dict, intent: str) -> None:
             st.markdown(f"*第 {term} 学期*（{len(courses)} 门课，共 {total} 学分）")
             st.dataframe(pd.DataFrame(courses), use_container_width=True)
     else:
-        st.info("已无剩余课程。")
+        st.info("已无剩余课程（已修完培养方案全部课程）。")
 
-    # 已修课程回顾（之前学期）
-    if plan.get("completed_courses"):
+    # 历史学期回顾（已修课程，按学期分组）
+    history = plan.get("history") or {}
+    if history:
+        st.markdown("**历史学期回顾（已修课程）**")
+        for term, courses in history.items():
+            if not courses:
+                continue
+            total = sum(c["学分"] for c in courses)
+            st.markdown(f"*第 {term} 学期*（{len(courses)} 门课，共 {total} 学分）")
+            st.dataframe(pd.DataFrame(courses), use_container_width=True)
+    elif plan.get("completed_courses"):
         st.markdown("**已修课程回顾**")
         st.dataframe(pd.DataFrame(plan["completed_courses"]), use_container_width=True)
 

@@ -36,7 +36,7 @@ def render() -> None:
             st.info("暂无工作区，请先点击「新建工作区」。")
     with col_new:
         if st.button("🆕 新建工作区", use_container_width=True):
-            st.session_state.new_ws_dialog = True
+            _create_dialog()
     with col_del:
         if current and current in names:
             if st.button("🗑️ 删除", use_container_width=True):
@@ -44,28 +44,22 @@ def render() -> None:
                 _clear_current()
                 st.rerun()
 
-    # 新建工作区弹窗（只输入名字，创建空工作区）
-    if st.session_state.get("new_ws_dialog"):
-        _render_create_dialog()
-
     # 切换工作区
     if selected and selected != current:
         _activate_by_name(selected)
 
-    # ============ 第二步：向当前工作区上传方案 ============
+    # ============ 第二步：培养方案 ============
     if current:
         st.divider()
         st.subheader("② 培养方案")
         ws = get_workspace(current)
         if ws and ws.get("cache_file"):
-            # 已绑定方案：只展示状态，上传区折叠隐藏
             st.success(f"已绑定方案：**{ws.get('pdf_name')}**")
-            with st.expander("更换培养方案"):
-                _render_upload(ws)
+            if st.button("更换培养方案"):
+                _change_dialog(current)
         else:
-            # 未绑定：显示上传区
             st.warning(f"「{current}」尚未绑定培养方案，请上传 PDF。")
-            _render_upload(ws)
+            _render_upload(current, ws)
 
     # 进入下一步
     if st.session_state.get("parsed") and current:
@@ -84,31 +78,46 @@ def _clear_current() -> None:
     reset_after(1)
 
 
-def _render_create_dialog() -> None:
-    with st.container(border=True):
-        st.markdown("**新建工作区**")
-        with st.form("create_workspace_form"):
-            name = st.text_input("工作区名称", placeholder="例如：计算机2023")
-            col_ok, col_cancel = st.columns(2)
-            with col_ok:
-                submitted = st.form_submit_button("创建", type="primary", use_container_width=True)
-            with col_cancel:
-                cancelled = st.form_submit_button("取消", use_container_width=True)
-        if cancelled:
-            st.session_state.new_ws_dialog = False
-            st.rerun()
-        if submitted:
+@st.dialog("新建工作区")
+def _create_dialog() -> None:
+    """独立的「新建工作区」弹窗：只有名称输入 + 创建/取消，创建后自动关闭。"""
+    name = st.text_input("工作区名称", placeholder="例如：计算机2023")
+    col_ok, col_cancel = st.columns(2)
+    with col_ok:
+        if st.button("创建", type="primary", use_container_width=True):
             if not name.strip():
                 st.warning("请输入工作区名称。")
                 return
-            if name_exists(name):
-                st.warning(f"已存在「{name}」，将自动追加序号区分。")
+            if name_exists(name.strip()):
+                st.warning(f"已存在「{name.strip()}」，将自动追加序号区分。")
             created = create_workspace(name.strip())
-            st.session_state.new_ws_dialog = False
             st.session_state.current_workspace = created["name"]
             _clear_current()
-            st.success(f"工作区「{created['name']}」已创建，请上传培养方案。")
+            st.session_state.current_workspace = created["name"]
             st.rerun()
+    with col_cancel:
+        if st.button("取消", use_container_width=True):
+            st.rerun()
+
+
+@st.dialog("更换培养方案")
+def _change_dialog(workspace_name: str) -> None:
+    """独立的「更换方案」弹窗，完成或取消后自动关闭。"""
+    st.caption(f"为工作区「{workspace_name}」更换培养方案 PDF")
+    upload = st.file_uploader("培养方案 PDF", type=["pdf"], key="change_pdf")
+    if upload is None:
+        if st.button("取消", use_container_width=True):
+            st.rerun()
+        return
+
+    existing_cache = find_cache_file(upload.getvalue())
+    if existing_cache:
+        st.info("检测到该文档之前已解析过，可直接复用。")
+        if st.button("复用并绑定", type="primary", use_container_width=True):
+            _parse_and_bind(workspace_name, upload, reuse=existing_cache)
+    else:
+        if st.button("解析并绑定", type="primary", use_container_width=True):
+            _parse_and_bind(workspace_name, upload)
 
 
 def _activate_by_name(name: str) -> None:
@@ -119,7 +128,7 @@ def _activate_by_name(name: str) -> None:
         st.rerun()
 
 
-def _render_upload(ws: dict | None) -> None:
+def _render_upload(workspace_name: str, ws: dict | None) -> None:
     upload = st.file_uploader("培养方案 PDF", type=["pdf"], key="curriculum_pdf")
     if upload is None:
         return
@@ -128,16 +137,15 @@ def _render_upload(ws: dict | None) -> None:
     if existing_cache:
         st.info("检测到该文档之前已解析过，可直接复用。")
         if st.button("复用并绑定到当前工作区", type="primary", use_container_width=True):
-            _parse_and_bind(upload, reuse=existing_cache)
+            _parse_and_bind(workspace_name, upload, reuse=existing_cache)
     else:
         if st.button("解析并绑定到当前工作区", type="primary", use_container_width=True):
-            _parse_and_bind(upload)
+            _parse_and_bind(workspace_name, upload)
 
 
-def _parse_and_bind(upload, reuse: str = "") -> None:
-    """解析 PDF（或复用缓存）并绑定到当前工作区。"""
+def _parse_and_bind(workspace_name: str, upload, reuse: str = "") -> None:
+    """解析 PDF（或复用缓存）并绑定到指定工作区。完成后关闭弹窗。"""
     pdf_bytes = upload.getvalue()
-    current = st.session_state.current_workspace
 
     if reuse:
         cache_file = reuse
@@ -153,7 +161,7 @@ def _parse_and_bind(upload, reuse: str = "") -> None:
         cache_file = _cache_name(pdf_bytes)
 
     # 绑定方案到工作区
-    bind_pdf(current, upload.name, cache_file)
+    bind_pdf(workspace_name, upload.name, cache_file)
     try:
         catalog = load_catalog_by_cache(cache_file)
     except FileNotFoundError:
@@ -180,7 +188,6 @@ def _parse_and_bind(upload, reuse: str = "") -> None:
     else:
         _warmup_models()
 
-    st.success(f"方案已绑定到工作区「{current}」。")
     st.rerun()
 
 

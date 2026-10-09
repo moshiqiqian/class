@@ -40,6 +40,7 @@ def _render_upload(profile: dict) -> tuple[list[dict], dict[str, float], list[st
         accept_multiple_files=True,
         key="transcript_uploads",
     )
+    st.caption("提示：可前往教务网导出「全部成绩单」，一次上传即可。")
     if not uploads:
         st.info("请上传至少一份成绩单。")
         return [], {}, [], [], []
