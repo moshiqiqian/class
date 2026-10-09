@@ -325,3 +325,93 @@ def build_semester_plan(profile: dict, curriculum: dict, target_semester: int) -
         "total_earned": sum(float(v) for v in profile.get("completed_credits", {}).values()),
         "warnings": [],
     }
+
+
+# 每学期学分上限（总学分 / 选修学分）
+MAX_CREDITS_PER_SEMESTER = 26.0
+MAX_ELECTIVE_CREDITS_PER_SEMESTER = 8.0
+
+
+def build_career_plan(profile: dict, curriculum: dict) -> dict:
+    """全大学生涯整体规划（第 1 至第 8 学期全覆盖）。
+
+    规则：
+    - 必修课：全部必须修读，按培养方案原始开课学期安排（未修的）。
+    - 选修课：只需修够各平台要求的选修学分，不必全修；按下述约束挑选。
+    - 每学期有学分上限（总学分、选修学分），超出则顺延到后续学期。
+    """
+    current = int(profile.get("current_semester", 1))
+    completed = set(profile.get("completed_courses", []))
+    requirements = curriculum.get("credit_requirements", {})
+    earned = profile.get("completed_credits", {})
+
+    courses = curriculum.get("courses", [])
+    required_courses = [c for c in courses if c.get("required", True) and c["name"] not in completed]
+    elective_courses = [c for c in courses if not c.get("required", True) and c["name"] not in completed]
+
+    # 各平台选修缺口（只修够即可）
+    elective_gap = {}
+    for platform, req in requirements.items():
+        if platform == "毕业总学分" or "选修" not in platform:
+            continue
+        elective_gap[platform] = max(0.0, float(req) - float(earned.get(platform, 0)))
+
+    timeline: dict[int, list[dict]] = {s: [] for s in range(1, 9)}
+    # 每学期已用学分
+    used_total = {s: 0.0 for s in range(1, 9)}
+    used_elective = {s: 0.0 for s in range(1, 9)}
+
+    # 1. 必修课：按原始学期，超出上限顺延
+    for c in sorted(required_courses, key=lambda c: int(c.get("semester", 1))):
+        term = max(int(c.get("semester", 1)), 1)
+        # 顺延到不超上限的学期
+        t = term
+        while t <= 8 and used_total[t] + float(c["credits"]) > MAX_CREDITS_PER_SEMESTER:
+            t += 1
+        if t > 8:
+            t = 8  # 兜底
+        row = _course_row(c)
+        row["状态"] = "建议修读"
+        timeline[t].append(row)
+        used_total[t] += float(c["credits"])
+
+    # 2. 选修课：按平台缺口挑选，修够即停；受每学期选修上限约束
+    for platform, gap in elective_gap.items():
+        picked = 0.0
+        pool = sorted([c for c in elective_courses if c.get("platform") == platform or c.get("category") == platform], key=lambda c: int(c.get("semester", 1)))
+        for c in pool:
+            if picked >= gap:
+                break
+            term = max(int(c.get("semester", 1)), 1)
+            t = term
+            # 找到有选修容量且总学分不超的学期
+            while t <= 8 and (used_elective[t] + float(c["credits"]) > MAX_ELECTIVE_CREDITS_PER_SEMESTER
+                              or used_total[t] + float(c["credits"]) > MAX_CREDITS_PER_SEMESTER):
+                t += 1
+            if t > 8:
+                continue  # 无容量，放弃该选修（只需修够即可）
+            row = _course_row(c)
+            row["状态"] = "建议选修"
+            timeline[t].append(row)
+            used_total[t] += float(c["credits"])
+            used_elective[t] += float(c["credits"])
+            picked += float(c["credits"])
+
+    # 每学期补充统计
+    result_timeline = {}
+    for t, rows in timeline.items():
+        if not rows:
+            continue
+        result_timeline[t] = rows
+
+    gap = calculate_gap(requirements, earned)
+    return {
+        "mode": "career",
+        "timeline": result_timeline,
+        "gap": gap,
+        "total_required": requirements.get("毕业总学分"),
+        "total_earned": sum(float(v) for v in earned.values()),
+        "warnings": [f"缺少第 {', '.join(map(str, profile['missing_semesters']))} 学期成绩单，缺口可能偏大。"] if profile.get("missing_semesters") else [],
+        "max_credits_per_semester": MAX_CREDITS_PER_SEMESTER,
+        "max_elective_per_semester": MAX_ELECTIVE_CREDITS_PER_SEMESTER,
+    }

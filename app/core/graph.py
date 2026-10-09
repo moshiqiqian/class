@@ -32,7 +32,7 @@ _INTENT_PROMPT = (
     "判断学生问题属于哪一类，并判断规划模式。只输出 JSON，不要输出其他内容：\n"
     '{{"intent": "plan|gap|review|missing|semester_plan|qa", "mode": "early|balanced|original|none", "target_semester": 0}}\n\n'
     "分类规则：\n"
-    "- plan：笼统的选课规划（问「下学期选什么课」「怎么规划课程」「提前修完」「平均分配」，未指定具体学期）\n"
+    "- plan：选课规划（问「下学期选什么课」「怎么规划课程」「提前修完」「平均分配」「整个大学生涯怎么规划」「大一到大四全程规划」）\n"
     "- semester_plan：为「某一个具体学期」规划课程（问「帮我规划第3学期」「重新规划第1学期」「第5学期该修什么」），target_semester 填该学期号(1-8)\n"
     "- gap：学分缺口（问「还差多少学分」「学分够不够毕业」）\n"
     "- review：查询「我自己」的成绩/绩点/已修课程（问「我绩点多少」「我学过哪些课」）\n"
@@ -42,7 +42,7 @@ _INTENT_PROMPT = (
     "- 提到具体学期号（如第1学期、大二上）并要求规划 → semester_plan，target_semester=学期号\n"
     "- 问「某门课的学分/开课学期/内容」→ qa\n"
     "- 拿不准时选 qa\n\n"
-    "mode 仅当 intent=plan 时有意义：early=提前修完, balanced=平均分配, original=原始安排\n\n"
+    "mode 仅当 intent=plan 时有意义：early=提前修完, balanced=平均分配, career=整个大学生涯全程规划(大一到大四), original=原始安排\n\n"
     "问题：{question}\n"
     "JSON："
 )
@@ -110,6 +110,8 @@ def _classify_intent(question: str) -> tuple[str, str, int]:
     if ("规划" in question or "重新规划" in question or "该修" in question) and _extract_semester(question):
         return "semester_plan", "balanced", _extract_semester(question)
     if any(word in question for word in _PLAN_MODE_KEYWORDS):
+        if "整个大学" in question or "全程" in question or "大一到大四" in question or "生涯" in question:
+            return "plan", "career", 0
         if "提前" in question or "大四前" in question:
             return "plan", "early", 0
         if "平均" in question or "均衡" in question:
@@ -139,8 +141,11 @@ def _plan_node(state: GraphState) -> dict[str, Any]:
     profile, curriculum = state["profile"], state["curriculum"]
     advice = advisory_notes(profile["major"], profile.get("completed_courses", []))
     mode = state.get("mode", "balanced")
-    plan = build_plan(profile, curriculum, advice, mode=mode)
-    # 基于结构化结果，让 LLM 生成自然语言建议
+    if mode == "career":
+        from app.core.calc import build_career_plan
+        plan = build_career_plan(profile, curriculum)
+    else:
+        plan = build_plan(profile, curriculum, advice, mode=mode)
     plan["suggestion"] = _generate_plan_suggestion(profile, plan)
     return {"plan_result": plan}
 
