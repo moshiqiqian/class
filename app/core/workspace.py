@@ -26,6 +26,10 @@ def list_workspaces() -> list[dict]:
     return _load()
 
 
+def get_workspace(name: str) -> dict | None:
+    return next((w for w in _load() if w["name"] == name), None)
+
+
 def name_exists(name: str) -> bool:
     return any(w["name"] == name for w in _load())
 
@@ -33,7 +37,7 @@ def name_exists(name: str) -> bool:
 def create_workspace(name: str, pdf_name: str, cache_file: str) -> dict:
     """新建工作区。返回创建的工作区。
 
-    重名时自动追加序号（如「2023级 (1)」），调用方应展示实际名称。
+    重名时自动追加序号。profile 初始为 None（学生信息待填写）。
     """
     workspaces = _load()
     base = name
@@ -47,30 +51,27 @@ def create_workspace(name: str, pdf_name: str, cache_file: str) -> dict:
         "pdf_name": pdf_name,
         "cache_file": cache_file,
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "profile": None,  # 学生画像，与工作区绑定
     }
     workspaces.append(workspace)
     _save(workspaces)
     return workspace
 
 
+def save_profile(workspace_name: str, profile: dict) -> None:
+    """把学生画像保存到指定工作区（工作区与学生绑定）。"""
+    workspaces = _load()
+    for w in workspaces:
+        if w["name"] == workspace_name:
+            w["profile"] = profile
+            break
+    _save(workspaces)
+
+
 def delete_workspace_by_name(name: str) -> None:
     """按名称删除工作区。"""
     workspaces = _load()
     _save([w for w in workspaces if w["name"] != name])
-
-
-def rename_workspace(index: int, new_name: str) -> None:
-    workspaces = _load()
-    if 0 <= index < len(workspaces):
-        workspaces[index]["name"] = new_name
-        _save(workspaces)
-
-
-def delete_workspace(index: int) -> None:
-    workspaces = _load()
-    if 0 <= index < len(workspaces):
-        workspaces.pop(index)
-        _save(workspaces)
 
 
 def find_cache_file(pdf_bytes: bytes) -> str:

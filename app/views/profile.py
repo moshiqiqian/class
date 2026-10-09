@@ -86,7 +86,7 @@ def _confirm_dialog(college: str, major: str, year: int, month: int) -> None:
 def _save_profile(college: str, major: str, year: int, month: int, current_semester: int) -> None:
     # 保留已填写的学分数据（如果已有），避免返回时丢失
     existing = st.session_state.profile or {}
-    st.session_state.profile = {
+    profile = {
         "college": college,
         "major": major,
         "enrollment_year": year,
@@ -97,4 +97,9 @@ def _save_profile(college: str, major: str, year: int, month: int, current_semes
         "failed_courses": existing.get("failed_courses", []),
         "missing_semesters": existing.get("missing_semesters", []),
     }
+    st.session_state.profile = profile
+    # 同步保存到当前工作区（工作区与学生绑定）
+    from app.core.workspace import save_profile
+    if st.session_state.get("current_workspace"):
+        save_profile(st.session_state.current_workspace, profile)
     reset_after(2)

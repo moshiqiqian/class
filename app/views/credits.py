@@ -143,6 +143,10 @@ def render() -> None:
             st.session_state.transcript_records = records or st.session_state.transcript_records
             st.session_state.credits_confirmed = True
             st.session_state.messages = []
+            # 同步保存到当前工作区（工作区与学生绑定）
+            from app.core.workspace import save_profile
+            if st.session_state.get("current_workspace"):
+                save_profile(st.session_state.current_workspace, profile)
             reset_after(3)
 
         footer(2, "进入智能对话 →", 4, on_next=_confirm)

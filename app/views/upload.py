@@ -68,7 +68,7 @@ def _clear_current() -> None:
 
 
 def _activate_by_name(name: str, workspaces: list[dict]) -> None:
-    """切换到已有工作区。从缓存加载 catalog（秒开，不重新解析）。"""
+    """切换到已有工作区。从缓存加载 catalog + 绑定的学生画像。"""
     ws = next((w for w in workspaces if w["name"] == name), None)
     if not ws:
         return
@@ -80,10 +80,14 @@ def _activate_by_name(name: str, workspaces: list[dict]) -> None:
     st.session_state.parsed_catalog = catalog
     st.session_state.parsed = True
     st.session_state.curriculum_pdf_name = ws.get("pdf_name", "")
-    st.session_state.curriculum_pdf_bytes = None  # 无 PDF bytes，问答用结构化数据 raw_text 兜底
+    st.session_state.curriculum_pdf_bytes = None
     st.session_state.current_workspace = name
     st.session_state.index_ready = False
-    reset_after(1)
+    # 加载工作区绑定的学生画像（工作区与学生绑定）
+    st.session_state.profile = ws.get("profile")
+    st.session_state.credits_confirmed = bool(ws.get("profile"))
+    st.session_state.transcript_records = []
+    st.session_state.messages = []
     _warmup_models()
     st.rerun()
 

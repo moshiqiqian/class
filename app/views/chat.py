@@ -25,6 +25,10 @@ def render() -> None:
             st.session_state.stage = 2
             st.rerun()
         return
+
+    # 顶部：切换工作区（对话页内也能切换，切换后重新加载对应学生画像）
+    _render_workspace_switcher()
+
     curriculum = _curriculum()
     if not curriculum:
         st.warning("未找到对应专业的课程表，请确认工作区和专业选择。")
@@ -44,6 +48,47 @@ def render() -> None:
         _render_grades()
     with tab_edit:
         _render_edit()
+
+
+def _render_workspace_switcher() -> None:
+    """对话页顶部的切换工作区控件。切换后重新加载学生画像，问问题不会串。"""
+    from app.core.workspace import list_workspaces, get_workspace
+    from app.core.extract_courses import load_catalog_by_cache
+
+    workspaces = list_workspaces()
+    if not workspaces:
+        return
+    names = [w["name"] for w in workspaces]
+    current = st.session_state.get("current_workspace", "")
+    idx = names.index(current) if current in names else 0
+
+    col_sel, col_back = st.columns([4, 1])
+    with col_sel:
+        selected = st.selectbox("工作区", names, index=idx, key="chat_ws_switch")
+    with col_back:
+        st.write("")
+        if st.button("↩ 返回向导", use_container_width=True):
+            st.session_state.stage = 1
+            st.rerun()
+
+    if selected != current:
+        # 切换工作区：重新加载 catalog + 绑定的学生画像
+        ws = get_workspace(selected)
+        if ws:
+            try:
+                catalog = load_catalog_by_cache(ws["cache_file"])
+                st.session_state.parsed_catalog = catalog
+                st.session_state.parsed = True
+                st.session_state.curriculum_pdf_name = ws.get("pdf_name", "")
+                st.session_state.curriculum_pdf_bytes = None
+                st.session_state.current_workspace = selected
+                st.session_state.profile = ws.get("profile")
+                st.session_state.credits_confirmed = bool(ws.get("profile"))
+                st.session_state.transcript_records = []
+                st.session_state.messages = []
+                st.rerun()
+            except FileNotFoundError:
+                st.error("该工作区缓存缺失。")
 
 
 def _render_chat(profile: dict, curriculum: dict) -> None:
