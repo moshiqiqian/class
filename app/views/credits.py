@@ -115,6 +115,13 @@ def render() -> None:
         st.warning("学生信息缺失，请先完成步骤 B。")
         return
 
+    # 兜底同步：若 session 无成绩单但工作区有，则加载（避免看不到已存成绩）
+    if not st.session_state.get("transcript_records") and st.session_state.get("current_workspace"):
+        from app.core.workspace import get_workspace
+        ws = get_workspace(st.session_state.current_workspace)
+        if ws and ws.get("transcripts"):
+            st.session_state.transcript_records = ws["transcripts"]
+
     # 顶部回显：之前已保存的学分信息
     if st.session_state.get("credits_confirmed") and profile.get("completed_credits"):
         st.success("已保存过往学分信息。返回本页会保留，可继续修改后重新确认。")

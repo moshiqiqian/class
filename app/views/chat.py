@@ -231,20 +231,16 @@ def _render_plan(plan: dict, intent: str) -> None:
 def _render_career_plan(plan: dict) -> None:
     """全大学生涯规划：详细叙述 + 逐学期说明（不只是表格）。"""
     timeline = plan.get("timeline", {})
-    total_earned = plan.get("total_earned", 0)
     total_required = plan.get("total_required")
-    max_total = plan.get("max_credits_per_semester", 26)
-    max_elective = plan.get("max_elective_per_semester", 8)
 
     # 总览叙述
     st.markdown("### 📋 大学四年整体规划")
     total_planned = sum(sum(c["学分"] for c in rows) for rows in timeline.values())
     st.markdown(
-        f"本规划基于你的培养方案，从**大一到大四**逐年逐学期安排课程，目标是**在满足学分要求的前提下均衡负担、留足余量**。\n\n"
-        f"- **已修学分**：{total_earned}" + (f" / 需修 {total_required}" if total_required else "") + "\n"
-        f"- **规划总学分**：{total_planned:.1f}（覆盖剩余需修课程）\n"
-        f"- **每学期上限**：总学分 ≤ {max_total:.0f}、选修学分 ≤ {max_elective:.0f}\n"
-        f"- **安排原则**：必修课按培养方案开课学期安排；选修课只修够要求学分即可，不必全修。"
+        f"本规划基于你的培养方案，从**大一到大四**逐年逐学期安排课程。\n\n"
+        f"- **规划总学分**：{total_planned:.1f}" + (f"（毕业需修 {total_required}）" if total_required else "") + "\n"
+        f"- **安排原则**：必修课按培养方案开课学期安排；选修课只修够要求学分即可，不必全修。\n"
+        f"- ⚠️ **重要**：课程只在培养方案规定的**开课学期**可选，**不可挪到其他学期**。如需在某学期多修选修，请从该学期**实际开设**的选修课中选择。"
     )
 
     st.divider()
@@ -398,15 +394,19 @@ def _render_edit() -> None:
         st.success("学生信息已更新。")
         st.rerun()
 
-    # ---- 重新上传/补充成绩单 ----
+    # ---- 成绩单管理 ----
     st.divider()
     st.markdown("**成绩单管理**")
     records = st.session_state.get("transcript_records", [])
     if records:
-        st.caption(f"当前已有 {len(records)} 条成绩记录。")
-    with st.expander("上传 / 重新上传成绩单", expanded=False):
+        st.success(f"当前已保存 {len(records)} 条成绩记录（可在「📊 成绩信息」查看）。")
+    else:
+        st.info("当前无成绩记录。上传成绩单后可查看绩点、已修课程等。")
+
+    with st.expander("上传 / 重新上传成绩单", expanded=not records):
         st.caption("提示：可前往教务网导出「全部成绩单」，一次上传即可。")
         uploads = st.file_uploader("成绩单文件", type=["pdf", "xlsx", "xls", "csv", "txt"], accept_multiple_files=True, key="edit_transcript_uploads")
+
         if uploads:
             from app.core.transcript import parse_upload, semester_from_academic_label, semester_from_filename
             new_records = []
@@ -416,13 +416,27 @@ def _render_edit() -> None:
                     new_records.extend(parse_upload(up, int(term) if term else None, profile.get("enrollment_year")))
                 except Exception as e:
                     st.error(f"{up.name} 解析失败：{e}")
+
             if new_records:
-                # 合并（按课程+学期去重，新记录覆盖旧记录）
-                merged = {f"{r['course']}|{r.get('semester')}": r for r in records}
-                for r in new_records:
-                    merged[f"{r['course']}|{r.get('semester')}"] = r
-                st.session_state.transcript_records = list(merged.values())
-                from app.core.workspace import save_transcripts
-                if st.session_state.get("current_workspace"):
-                    save_transcripts(st.session_state.current_workspace, st.session_state.transcript_records)
-                st.toast(f"已更新成绩单，共 {len(st.session_state.transcript_records)} 条记录。")
+                # 预览解析结果，等用户确认
+                st.markdown(f"**解析预览**（{len(new_records)} 条，请核对后确认）")
+                st.dataframe(pd.DataFrame([{
+                    "课程名称": r["course"], "成绩": r["score"], "学分": r["credits"],
+                    "学期": r.get("semester"), "绩点": r.get("gpa"),
+                } for r in new_records]), use_container_width=True)
+
+                if st.button("✓ 确认上传", type="primary", use_container_width=True):
+                    # 合并（按课程+学期去重，新记录覆盖旧记录）
+                    merged = {f"{r['course']}|{r.get('semester')}": r for r in records}
+                    for r in new_records:
+                        merged[f"{r['course']}|{r.get('semester')}"] = r
+                    st.session_state.transcript_records = list(merged.values())
+                    from app.core.workspace import save_transcripts
+                    if st.session_state.get("current_workspace"):
+                        save_transcripts(st.session_state.current_workspace, st.session_state.transcript_records)
+                    st.session_state.transcript_just_uploaded = True
+                    st.rerun()
+
+    # 上传成功提示（rerun 后显示一次）
+    if st.session_state.pop("transcript_just_uploaded", False):
+        st.success(f"✓ 成绩单上传成功！已保存 {len(st.session_state.get('transcript_records', []))} 条记录，可切换到「📊 成绩信息」查看。")
