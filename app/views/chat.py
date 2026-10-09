@@ -182,6 +182,11 @@ def _render_plan(plan: dict, intent: str) -> None:
             st.info(f"第 {target} 学期培养方案无课程安排。")
         return
 
+    # 全大学生涯规划（career）：详细叙述 + 逐学期说明
+    if plan.get("mode") == "career":
+        _render_career_plan(plan)
+        return
+
     # 学分缺口（普通规划展示）
     st.markdown("**学分缺口统计**")
     gap_rows = []
@@ -202,7 +207,7 @@ def _render_plan(plan: dict, intent: str) -> None:
 
     # 剩余学期规划
     st.markdown("**剩余学期规划**")
-    if plan["timeline"]:
+    if plan.get("timeline"):
         for term, courses in plan["timeline"].items():
             total = sum(c["学分"] for c in courses)
             elective = sum(c["学分"] for c in courses if c.get("性质") == "选修")
@@ -211,9 +216,54 @@ def _render_plan(plan: dict, intent: str) -> None:
     else:
         st.info("已无剩余课程（已修完培养方案全部课程）。")
 
-    if plan["retakes"]:
+    if plan.get("retakes"):
         st.markdown("**补考 / 重修安排**")
         st.dataframe(pd.DataFrame(plan["retakes"]), use_container_width=True)
+
+
+def _render_career_plan(plan: dict) -> None:
+    """全大学生涯规划：详细叙述 + 逐学期说明（不只是表格）。"""
+    timeline = plan.get("timeline", {})
+    total_earned = plan.get("total_earned", 0)
+    total_required = plan.get("total_required")
+    max_total = plan.get("max_credits_per_semester", 26)
+    max_elective = plan.get("max_elective_per_semester", 8)
+
+    # 总览叙述
+    st.markdown("### 📋 大学四年整体规划")
+    total_planned = sum(sum(c["学分"] for c in rows) for rows in timeline.values())
+    st.markdown(
+        f"本规划基于你的培养方案，从**大一到大四**逐年逐学期安排课程，目标是**在满足学分要求的前提下均衡负担、留足余量**。\n\n"
+        f"- **已修学分**：{total_earned}" + (f" / 需修 {total_required}" if total_required else "") + "\n"
+        f"- **规划总学分**：{total_planned:.1f}（覆盖剩余需修课程）\n"
+        f"- **每学期上限**：总学分 ≤ {max_total:.0f}、选修学分 ≤ {max_elective:.0f}\n"
+        f"- **安排原则**：必修课按培养方案开课学期安排；选修课只修够要求学分即可，不必全修。"
+    )
+
+    st.divider()
+
+    # 逐学期详细说明
+    for term, rows in timeline.items():
+        total = sum(c["学分"] for c in rows)
+        required = [c for c in rows if c.get("性质") == "必修"]
+        elective = [c for c in rows if c.get("性质") == "选修"]
+        year = (term + 1) // 2
+        half = "上" if term % 2 == 1 else "下"
+
+        st.markdown(f"#### 第 {term} 学期（大{['一','二','三','四'][year-1]}{half}）")
+        st.markdown(
+            f"本学期共 **{len(rows)} 门课、{total:.1f} 学分**"
+            f"（必修 {len(required)} 门/{sum(c['学分'] for c in required):.1f} 学分，"
+            f"选修 {len(elective)} 门/{sum(c['学分'] for c in elective):.1f} 学分）。"
+        )
+        if required:
+            st.markdown("**必修**：" + "、".join(f"{c['课程名称']}({c['学分']})" for c in required))
+        if elective:
+            st.markdown("**选修**：" + "、".join(f"{c['课程名称']}({c['学分']})" for c in elective))
+        st.dataframe(pd.DataFrame(rows), use_container_width=True)
+
+    st.divider()
+    st.info("💡 这是按学分上限生成的**适应性方案**。如果你能提供每学期的具体学分目标、偏好课程，或某些课程的开课限制，我可以据此重新优化。请结合自己实际情况选修。")
 
 
 def _render_review(review: dict) -> None:
