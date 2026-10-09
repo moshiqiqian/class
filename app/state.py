@@ -23,6 +23,8 @@ DEFAULTS: dict[str, object] = {
     "semester_confirmed": False,         # 学期是否已二次确认
     "show_adjust": False,                # 是否展开学期调整框
     "profile_current": 1,                # 确认后的当前学期
+    "dialog_open": False,                # 学期确认弹窗是否打开
+    "parsing": False,                    # 是否正在解析 PDF
 }
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, TypedDict
 
+import streamlit as st
 from langgraph.graph import END, StateGraph
 
 from app.core.calc import build_plan
@@ -69,6 +70,7 @@ def _build_extra_context(curriculum: dict) -> str:
     return "\n".join(parts)
 
 
+@st.cache_resource(show_spinner=False)
 def build_graph():
     workflow = StateGraph(GraphState)
 
@@ -77,7 +79,6 @@ def build_graph():
     workflow.add_node("answer", _answer_node)
 
     workflow.set_entry_point("classify")
-    # plan_mode / gap / plan 都走规划节点（gap 在 view 层只展示缺口，不展示规划）
     workflow.add_conditional_edges(
         "classify",
         lambda state: state["intent"],

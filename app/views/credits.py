@@ -3,8 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from app.core.calc import PLATFORMS, missing_semesters, summarize_transcripts
-from app.core.matching import build_lookup, match_course, normalize_name
+from app.core.calc import PLATFORMS, missing_semester_labels, summarize_transcripts
 from app.core.transcript import parse_upload, semester_from_academic_label, semester_from_filename
 from app.ui import footer
 from app.state import reset_after
@@ -29,9 +28,9 @@ def _render_manual(profile: dict) -> dict[str, float]:
     return credits
 
 
-def _render_upload(profile: dict, curriculum: dict) -> tuple[list[dict], dict[str, float], list[str], list[dict], list[int]]:
+def _render_upload(profile: dict) -> tuple[list[dict], dict[str, float], list[str], list[dict], list[int]]:
     uploads = st.file_uploader(
-        "上传多个成绩单文件（每学期一个，可乱序上传）",
+        "上传多个成绩单文件（可一次传多个学期，乱序也可以）",
         type=["pdf", "xlsx", "xls", "csv", "txt"],
         accept_multiple_files=True,
         key="transcript_uploads",
@@ -56,24 +55,24 @@ def _render_upload(profile: dict, curriculum: dict) -> tuple[list[dict], dict[st
     if not records:
         return [], {}, [], [], []
 
-    # 明细表（中文表头 + 课程类型）
-    lookup = build_lookup(curriculum["courses"])
+    # 明细表（中文表头 + 课程类型 + 绩点）
     st.subheader("解析明细（请核对）")
     detail = pd.DataFrame([{
         "课程名称": r["course"],
-        "课程类型": _match_platform(r["course"], curriculum, lookup),
+        "课程类型": r.get("platform") or "未匹配",
         "成绩": r["score"],
         "学分": r["credits"],
         "学期": r["semester"],
+        "绩点": r.get("gpa"),
         "是否及格": "是" if r["passed"] else "否",
     } for r in records])
     st.dataframe(detail, use_container_width=True)
 
-    # 缺失学期监测
+    # 缺失学期监测（用可读的「第几学年第几学期」标签）
     received = {r["semester"] for r in records}
-    missing = missing_semesters(profile["current_semester"], received)
+    missing = missing_semester_labels(profile["current_semester"], received)
     if missing:
-        st.warning(f"检测到缺少第 {'、'.join(map(str, missing))} 学期的成绩单，请补充后再确认，以免规划结果偏差。")
+        st.warning("检测到缺少以下学期的成绩单，请补充后再确认，以免规划结果偏差：\n\n" + "、".join(missing))
     else:
         st.success("成绩单学期完整。")
 
@@ -90,39 +89,22 @@ def _render_upload(profile: dict, curriculum: dict) -> tuple[list[dict], dict[st
             )
         st.session_state.transcript_statuses = statuses
 
-    course_platforms = {normalize_name(c["name"]): c["platform"] for c in curriculum["courses"]}
-    completed_credits, completed_courses, failed = summarize_transcripts(
-        records, course_platforms, st.session_state.transcript_statuses,
-        match=lambda name: normalize_name(match_course(name, lookup) or name),
-    )
-
-    unmatched = [r for r in records if match_course(r["course"], lookup) is None]
-    if unmatched:
-        st.warning("以下课程未能匹配到培养方案课程表，学分未归类，请核对课程名或改用手动填写：\n\n" + "、".join(sorted({r['course'] for r in unmatched})))
+    # 归集：优先用成绩单自带的平台，无需匹配培养方案
+    completed_credits, completed_courses, failed = summarize_transcripts(records, {}, st.session_state.transcript_statuses)
 
     return records, completed_credits, completed_courses, failed, missing
 
 
-def _match_platform(name: str, curriculum: dict, lookup: dict) -> str:
-    matched = match_course(name, lookup)
-    if matched is None:
-        return "未匹配"
-    for c in curriculum["courses"]:
-        if c["name"] == matched:
-            return c.get("category", c.get("platform", ""))
-    return "未匹配"
-
-
 def render() -> None:
     st.header("步骤 C · 过往学分录入")
-    profile, curriculum = st.session_state.profile, _curriculum()
+    profile = st.session_state.profile
     mode = st.radio("录入方式", ("手动填写", "上传成绩单分析"), horizontal=True, key="credit_mode")
 
     records, completed_credits, completed_courses, failed, missing = [], {}, [], [], []
     if mode == "手动填写":
         completed_credits = _render_manual(profile)
     else:
-        records, completed_credits, completed_courses, failed, missing = _render_upload(profile, curriculum)
+        records, completed_credits, completed_courses, failed, missing = _render_upload(profile)
 
     if mode == "手动填写" or records:
         st.subheader("已获学分汇总")

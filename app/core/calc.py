@@ -64,6 +64,21 @@ def missing_semesters(current_semester: int, received_semesters: set[int | None]
     return sorted(expected - {item for item in received_semesters if item is not None})
 
 
+def semester_label(semester: int) -> str:
+    """把绝对学期号（1-8）转为「第 N 学年第 1/2 学期」。
+
+    第1学期=第1学年第1学期，第2学期=第1学年第2学期，第3学期=第2学年第1学期……
+    """
+    year = (semester + 1) // 2
+    term = 1 if semester % 2 == 1 else 2
+    return f"第 {year} 学年第 {term} 学期"
+
+
+def missing_semester_labels(current_semester: int, received_semesters: set[int | None]) -> list[str]:
+    """返回缺失学期的可读标签（如「第 2 学年第 1 学期」）。"""
+    return [semester_label(s) for s in missing_semesters(current_semester, received_semesters)]
+
+
 def grade_point(score: object) -> float:
     """4 分制绩点换算：90+→4.0，80-89→3.0，70-79→2.0，60-69→1.0，<60→0。"""
     try:
@@ -82,24 +97,33 @@ def grade_point(score: object) -> float:
 
 
 def calculate_gpa(records: list[dict]) -> dict:
-    """按 4 分制加权平均计算绩点：GPA = Σ(学分 × 绩点) / Σ学分。"""
+    """按 4 分制加权平均计算绩点：GPA = Σ(学分 × 绩点) / Σ学分。
+
+    优先使用记录自带的 gpa 字段（成绩单「绩点」列），否则用成绩换算。
+    """
     total_credits = 0.0
     total_points = 0.0
     detail = []
     for record in records:
         if not record.get("passed"):
-            continue  # 不及格课程不计入绩点（学分通常不获得）
+            continue  # 不及格课程不计入绩点
         credits = float(record.get("credits", 0))
-        point = grade_point(record.get("score"))
+        point = record.get("gpa")
+        if point is None:
+            point = grade_point(record.get("score"))
         total_credits += credits
-        total_points += credits * point
-        detail.append({"course": record["course"], "score": record.get("score"), "credits": credits, "grade_point": point})
+        total_points += credits * float(point)
+        detail.append({"course": record["course"], "score": record.get("score"), "credits": credits, "grade_point": float(point)})
     gpa = round(total_points / total_credits, 2) if total_credits else 0.0
     return {"gpa": gpa, "total_credits": total_credits, "detail": detail}
 
 
 def summarize_transcripts(records: list[dict], course_platforms: dict[str, str], statuses: dict[str, str], match=None) -> tuple[dict[str, float], list[str], list[dict]]:
-    """将成绩单记录归集到平台。返回 (各平台学分, 已通过课程列表, 不及格课程列表)。"""
+    """将成绩单记录归集到平台。返回 (各平台学分, 已通过课程列表, 不及格课程列表)。
+
+    优先使用记录自带的 platform 字段（成绩单「课程性质」列），
+    否则用 course_platforms 匹配（match 为课程名匹配器）。
+    """
     credits, completed, failed = empty_credits(), [], []
     for record in records:
         name = record["course"]
@@ -108,7 +132,9 @@ def summarize_transcripts(records: list[dict], course_platforms: dict[str, str],
         if not passed:
             failed.append({**record, "status": status or "待确认"})
             continue
-        platform = course_platforms.get(match(name) if match else name)
+        platform = record.get("platform")
+        if not platform:
+            platform = course_platforms.get(match(name) if match else name)
         if platform:
             credits[platform] += float(record["credits"])
         completed.append(name)

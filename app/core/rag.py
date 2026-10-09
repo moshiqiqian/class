@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 import app.config  # noqa: F401  确保 .env 已加载
+import streamlit as st
 
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -12,9 +13,23 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 INDEX_DIR = Path("data/chroma_db")
 
 
+@st.cache_resource(show_spinner=False)
 def _embeddings():
+    """缓存 embedding 模型，避免每次问答重复加载（加载 bge-m3 很慢）。"""
     from langchain_huggingface import HuggingFaceEmbeddings
     return HuggingFaceEmbeddings(model_name="BAAI/bge-m3", model_kwargs={"device": "cpu"}, encode_kwargs={"normalize_embeddings": True})
+
+
+@st.cache_resource(show_spinner=False)
+def _llm():
+    """缓存 LLM 客户端，避免每次问答重复初始化。"""
+    from langchain_openai import ChatOpenAI
+    return ChatOpenAI(
+        model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
+        api_key=os.getenv("DEEPSEEK_API_KEY", ""),
+        base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+        temperature=0,
+    )
 
 
 def index_documents(pdf_bytes: bytes, filename: str) -> int:
@@ -53,7 +68,7 @@ def answer(question: str, college: str, major: str, extra_context: str = "") -> 
     context = "\n\n".join(document.page_content for document in documents)
     if extra_context:
         context = f"{extra_context}\n\n{context}"
-    model = ChatOpenAI(model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"), api_key=key, base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"), temperature=0)
+    model = _llm()
     prompt = (
         f"你是「{college} · {major}」的培养方案问答助手。请依据下列资料，详细、准确地回答学生的问题。\n\n"
         "回答要求：\n"
