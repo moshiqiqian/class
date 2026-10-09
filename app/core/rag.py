@@ -136,24 +136,27 @@ def retrieve_sections(question: str, k: int = 6) -> list[dict]:
 
 
 def answer(question: str, college: str, major: str, extra_context: str = "", full_text: str = "") -> tuple[str, list[dict]]:
-    """生成回答。优先「父文档检索」（碎片定位 + 章节还原），
-    回退「完整原文」，再回退「向量碎片」。"""
+    """生成回答。
+
+    优先级：完整原文 full_text（当前工作区，正确）> 向量检索（全局索引，可能串工作区）。
+    """
     key = os.getenv("DEEPSEEK_API_KEY", "")
     citations: list[dict] = []
 
-    # 策略 1：父文档检索（最省 token 且上下文完整）
-    sections = retrieve_sections(question)
-    if sections:
-        context = "\n\n".join(f"【{s['title']}】\n{s['content']}" for s in sections)
-        if extra_context:
-            context = f"{extra_context}\n\n{context}"
-    elif full_text:
-        # 策略 2：完整原文兜底
+    # 策略 1：完整原文（当前工作区数据，最可靠，不会被别的文件污染）
+    if full_text:
         context = full_text
         if extra_context:
             context = f"{extra_context}\n\n{context}"
     else:
-        return "尚未建立 RAG 索引，无法回答。请先上传培养方案建立索引。", []
+        # 策略 2：向量检索兜底（仅当没有完整原文时）
+        sections = retrieve_sections(question)
+        if sections:
+            context = "\n\n".join(f"【{s['title']}】\n{s['content']}" for s in sections)
+            if extra_context:
+                context = f"{extra_context}\n\n{context}"
+        else:
+            return "尚未建立索引或缺失培养方案资料，无法回答。", []
 
     if not key:
         return "未配置 DEEPSEEK_API_KEY，无法生成回答。", citations

@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from app.core.calc import build_plan, calculate_gpa
+from app.core.calc import build_plan, calculate_gpa, gpa_by_semester
 from app.core.graph import build_graph
 
 
@@ -150,7 +150,7 @@ def _render_plan(plan: dict, intent: str) -> None:
 
 
 def _render_review(review: dict) -> None:
-    """回顾：绩点 + 已修课程 + 学分进度。"""
+    """回顾：绩点 + 已修课程（分学期）+ 学分进度。"""
     if review.get("gpa"):
         col1, col2 = st.columns(2)
         with col1:
@@ -162,11 +162,30 @@ def _render_review(review: dict) -> None:
         st.progress(min(1.0, review["total_earned"] / review["total_required"]))
         st.caption(f"学分进度：{review['total_earned']} / {review['total_required']}")
 
-    if review.get("completed_courses"):
+    # 已修课程分学期展示（用成绩单记录）
+    records = st.session_state.get("transcript_records", [])
+    if records:
+        by_sem = gpa_by_semester(records)
+        if by_sem:
+            st.markdown("**已修课程（分学期）**")
+            for sem, info in by_sem.items():
+                st.markdown(f"*第 {sem} 学期* · 平均绩点 {info['gpa']} · {len(info['courses'])} 门课")
+                st.dataframe(pd.DataFrame([{
+                    "课程名称": r["course"], "成绩": r["score"], "学分": r["credits"]
+                } for r in info["courses"]]), use_container_width=True)
+        else:
+            _render_plain_courses(review)
+    elif review.get("completed_courses"):
         st.markdown("**已修课程**")
         st.dataframe(pd.DataFrame(review["completed_courses"]), use_container_width=True)
     else:
         st.info("暂无已修课程记录。请先在「过往学分」步骤上传成绩单。")
+
+
+def _render_plain_courses(review: dict) -> None:
+    if review.get("completed_courses"):
+        st.markdown("**已修课程**")
+        st.dataframe(pd.DataFrame(review["completed_courses"]), use_container_width=True)
 
 
 def _render_grades() -> None:
@@ -174,26 +193,60 @@ def _render_grades() -> None:
     if not records:
         st.info("暂无成绩单数据。请先在「过往学分」步骤上传成绩单。")
         return
+
     gpa_info = calculate_gpa(records)
-    col1, col2 = st.columns(2)
+
+    # 顶部总览（更丰富）
+    col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("绩点（GPA，4分制）", gpa_info["gpa"])
+        st.metric("总绩点（GPA）", gpa_info["gpa"])
     with col2:
         st.metric("已获学分", gpa_info["total_credits"])
+    with col3:
+        passed = sum(1 for r in records if r.get("passed"))
+        st.metric("已修课程数", f"{passed} / {len(records)}")
 
-    st.markdown("**已修课程明细**")
-    detail = pd.DataFrame([{
+    st.divider()
+
+    # 按学期分组
+    by_sem = gpa_by_semester(records)
+    if not by_sem:
+        st.info("成绩单中未识别到学期信息，无法按学期分组展示。")
+        return
+
+    # 8 学期下拉切换，不堆在一起
+    from app.core.calc import semester_label
+    available_sems = sorted(by_sem.keys())
+    options = {f"第 {s} 学期（{semester_label(s)}）": s for s in available_sems}
+    selected_label = st.selectbox("选择学期查看", list(options.keys()), key="grade_sem_select")
+    selected_sem = options[selected_label]
+
+    info = by_sem[selected_sem]
+    st.markdown(f"**第 {selected_sem} 学期** · 平均绩点 **{info['gpa']}** · 学分 **{info['total_credits']}**")
+    courses_df = pd.DataFrame([{
         "课程名称": r["course"],
         "成绩": r["score"],
         "学分": r["credits"],
-        "绩点": r["grade_point"],
-    } for r in gpa_info["detail"]])
-    st.dataframe(detail, use_container_width=True)
+        "绩点": r.get("gpa") if r.get("gpa") is not None else r.get("grade_point"),
+        "是否及格": "是" if r.get("passed") else "否",
+    } for r in info["courses"]])
+    st.dataframe(courses_df, use_container_width=True)
 
-    failed = [r for r in records if not r["passed"]]
+    # 各学期绩点总览（小表格，快速对比）
+    st.divider()
+    st.markdown("**各学期绩点一览**")
+    overview = pd.DataFrame([
+        {"学期": f"第 {s} 学期", "平均绩点": v["gpa"], "学分": v["total_credits"], "课程数": len(v["courses"])}
+        for s, v in by_sem.items()
+    ])
+    st.dataframe(overview, use_container_width=True)
+
+    # 不及格课程
+    failed = [r for r in records if not r.get("passed")]
     if failed:
+        st.divider()
         st.markdown("**不及格课程**")
-        st.dataframe(pd.DataFrame([{"课程名称": r["course"], "成绩": r["score"], "学分": r["credits"]} for r in failed]), use_container_width=True)
+        st.dataframe(pd.DataFrame([{"课程名称": r["course"], "成绩": r["score"], "学分": r["credits"], "学期": r.get("semester")} for r in failed]), use_container_width=True)
 
 
 def _render_edit() -> None:

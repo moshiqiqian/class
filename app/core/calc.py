@@ -113,9 +113,38 @@ def calculate_gpa(records: list[dict]) -> dict:
             point = grade_point(record.get("score"))
         total_credits += credits
         total_points += credits * float(point)
-        detail.append({"course": record["course"], "score": record.get("score"), "credits": credits, "grade_point": float(point)})
+        detail.append({"course": record["course"], "score": record.get("score"), "credits": credits, "grade_point": float(point), "semester": record.get("semester")})
     gpa = round(total_points / total_credits, 2) if total_credits else 0.0
     return {"gpa": gpa, "total_credits": total_credits, "detail": detail}
+
+
+def gpa_by_semester(records: list[dict]) -> dict[int, dict]:
+    """按学期分组计算绩点。返回 {学期: {gpa, total_credits, courses}}。"""
+    by_sem: dict[int, list[dict]] = {}
+    for record in records:
+        sem = record.get("semester")
+        if sem is None:
+            continue
+        by_sem.setdefault(int(sem), []).append(record)
+    result = {}
+    for sem, recs in sorted(by_sem.items()):
+        total_credits = 0.0
+        total_points = 0.0
+        passed_recs = [r for r in recs if r.get("passed")]
+        for r in passed_recs:
+            credits = float(r.get("credits", 0))
+            point = r.get("gpa")
+            if point is None:
+                point = grade_point(r.get("score"))
+            total_credits += credits
+            total_points += credits * float(point)
+        gpa = round(total_points / total_credits, 2) if total_credits else 0.0
+        result[sem] = {
+            "gpa": gpa,
+            "total_credits": round(total_credits, 1),
+            "courses": recs,
+        }
+    return result
 
 
 def summarize_transcripts(records: list[dict], course_platforms: dict[str, str], statuses: dict[str, str], match=None) -> tuple[dict[str, float], list[str], list[dict]]:

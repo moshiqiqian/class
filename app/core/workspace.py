@@ -26,10 +26,16 @@ def list_workspaces() -> list[dict]:
     return _load()
 
 
+def name_exists(name: str) -> bool:
+    return any(w["name"] == name for w in _load())
+
+
 def create_workspace(name: str, pdf_name: str, cache_file: str) -> dict:
-    """新建工作区。返回创建的工作区。"""
+    """新建工作区。返回创建的工作区。
+
+    重名时自动追加序号（如「2023级 (1)」），调用方应展示实际名称。
+    """
     workspaces = _load()
-    # 重名时追加序号
     base = name
     counter = 1
     existing = {w["name"] for w in workspaces}
@@ -45,6 +51,12 @@ def create_workspace(name: str, pdf_name: str, cache_file: str) -> dict:
     workspaces.append(workspace)
     _save(workspaces)
     return workspace
+
+
+def delete_workspace_by_name(name: str) -> None:
+    """按名称删除工作区。"""
+    workspaces = _load()
+    _save([w for w in workspaces if w["name"] != name])
 
 
 def rename_workspace(index: int, new_name: str) -> None:

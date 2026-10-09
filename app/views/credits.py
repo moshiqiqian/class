@@ -48,7 +48,6 @@ def _render_upload(profile: dict) -> tuple[list[dict], dict[str, float], list[st
     term_options = list(range(1, max(2, profile["current_semester"] + 1)))
     records: list[dict] = []
     for index, upload in enumerate(uploads):
-        # 学期识别优先级：文件名「学年+学期」> 文件名数字 > 手动选择
         term = semester_from_academic_label(upload.name, enrollment_year) or semester_from_filename(upload.name)
         if term is None:
             term = st.selectbox(f"{upload.name} 对应的学期", term_options, key=f"term_{index}")
@@ -73,7 +72,7 @@ def _render_upload(profile: dict) -> tuple[list[dict], dict[str, float], list[st
     } for r in records])
     st.dataframe(detail, use_container_width=True)
 
-    # 缺失学期监测（用可读的「第几学年第几学期」标签）
+    # 缺失学期监测
     received = {r["semester"] for r in records}
     missing = missing_semester_labels(profile["current_semester"], received)
     if missing:
@@ -94,7 +93,6 @@ def _render_upload(profile: dict) -> tuple[list[dict], dict[str, float], list[st
             )
         st.session_state.transcript_statuses = statuses
 
-    # 归集：优先用成绩单自带的平台，无需匹配培养方案
     completed_credits, completed_courses, failed = summarize_transcripts(records, {}, st.session_state.transcript_statuses)
 
     return records, completed_credits, completed_courses, failed, missing
@@ -109,7 +107,7 @@ def render() -> None:
 
     # 顶部回显：之前已保存的学分信息
     if st.session_state.get("credits_confirmed") and profile.get("completed_credits"):
-        st.success("已保存过往学分信息（返回时会保留，可继续修改后重新确认）。")
+        st.success("已保存过往学分信息。返回本页会保留，可继续修改后重新确认。")
 
     mode = st.radio("录入方式", ("手动填写", "上传成绩单分析"), horizontal=True, key="credit_mode")
 
@@ -119,24 +117,32 @@ def render() -> None:
     else:
         records, completed_credits, completed_courses, failed, missing = _render_upload(profile)
 
-    if mode == "手动填写" or records or profile.get("completed_credits"):
-        # 汇总：优先用本次计算结果，否则回显已保存的
-        if not completed_credits and profile.get("completed_credits"):
-            completed_credits = profile["completed_credits"]
+    # 回显：若本次没有计算（如切换模式或返回），用已保存的 profile 数据
+    if not completed_credits and profile.get("completed_credits"):
+        completed_credits = profile["completed_credits"]
+    if not completed_courses and profile.get("completed_courses"):
+        completed_courses = profile["completed_courses"]
+    if not failed and profile.get("failed_courses"):
+        failed = profile["failed_courses"]
+
+    if mode == "手动填写" or records or completed_credits:
         st.subheader("已获学分汇总")
-        st.dataframe(pd.DataFrame([{"平台": k, "已获学分": v} for k, v in completed_credits.items()]), use_container_width=True)
+        summary = pd.DataFrame([{"平台": k, "已获学分": v} for k, v in completed_credits.items()])
+        st.dataframe(summary, use_container_width=True)
+        total = sum(v for v in completed_credits.values())
+        st.caption(f"已获学分总计：**{total}** 学分")
 
         def _confirm() -> None:
             profile.update({
                 "completed_credits": completed_credits,
-                "completed_courses": completed_courses or profile.get("completed_courses", []),
-                "failed_courses": failed or profile.get("failed_courses", []),
-                "missing_semesters": missing or profile.get("missing_semesters", []),
+                "completed_courses": completed_courses,
+                "failed_courses": failed,
+                "missing_semesters": missing,
             })
             st.session_state.profile = profile
             st.session_state.transcript_records = records or st.session_state.transcript_records
             st.session_state.credits_confirmed = True
-            st.session_state.messages = []  # 清空旧对话
+            st.session_state.messages = []
             reset_after(3)
 
         footer(2, "进入智能对话 →", 4, on_next=_confirm)
