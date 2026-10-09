@@ -86,22 +86,28 @@ def _clear_current() -> None:
 def _render_create_dialog() -> None:
     with st.container(border=True):
         st.markdown("**新建工作区**")
-        name = st.text_input("工作区名称", placeholder="例如：计算机2023", key="new_ws_name")
-        col_ok, col_cancel = st.columns(2)
-        with col_ok:
-            if st.button("创建", type="primary", use_container_width=True, disabled=not name):
-                if name_exists(name):
-                    st.warning(f"已存在「{name}」，将自动追加序号区分。")
-                created = create_workspace(name)
-                st.session_state.new_ws_dialog = False
-                st.session_state.current_workspace = created["name"]
-                _clear_current()
-                st.success(f"工作区「{created['name']}」已创建，请上传培养方案。")
-                st.rerun()
-        with col_cancel:
-            if st.button("取消", use_container_width=True):
-                st.session_state.new_ws_dialog = False
-                st.rerun()
+        with st.form("create_workspace_form"):
+            name = st.text_input("工作区名称", placeholder="例如：计算机2023")
+            col_ok, col_cancel = st.columns(2)
+            with col_ok:
+                submitted = st.form_submit_button("创建", type="primary", use_container_width=True)
+            with col_cancel:
+                cancelled = st.form_submit_button("取消", use_container_width=True)
+        if cancelled:
+            st.session_state.new_ws_dialog = False
+            st.rerun()
+        if submitted:
+            if not name.strip():
+                st.warning("请输入工作区名称。")
+                return
+            if name_exists(name):
+                st.warning(f"已存在「{name}」，将自动追加序号区分。")
+            created = create_workspace(name.strip())
+            st.session_state.new_ws_dialog = False
+            st.session_state.current_workspace = created["name"]
+            _clear_current()
+            st.success(f"工作区「{created['name']}」已创建，请上传培养方案。")
+            st.rerun()
 
 
 def _activate_by_name(name: str) -> None:

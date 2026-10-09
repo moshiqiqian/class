@@ -129,9 +129,15 @@ def _render_chat(profile: dict, curriculum: dict) -> None:
                 _render_plan(plan, intent)
         elif result.get("review_result"):
             review = result["review_result"]
-            st.session_state.messages.append({"role": "assistant", "content": "已修课程与绩点回顾", "review": review})
-            with st.chat_message("assistant"):
-                _render_review(review)
+            if review.get("missing_semesters") is not None:
+                # missing 意图：只回答缺失哪些学期
+                st.session_state.messages.append({"role": "assistant", "content": "缺失学期查询", "missing": review})
+                with st.chat_message("assistant"):
+                    _render_missing(review)
+            else:
+                st.session_state.messages.append({"role": "assistant", "content": "已修课程与绩点回顾", "review": review})
+                with st.chat_message("assistant"):
+                    _render_review(review)
         else:
             answer = result.get("answer", "")
             st.session_state.messages.append({"role": "assistant", "content": answer})
@@ -147,8 +153,29 @@ def _render_message(message: dict) -> None:
             _render_plan(message["plan"], message.get("intent", "plan"))
         elif message["role"] == "assistant" and message.get("review"):
             _render_review(message["review"])
+        elif message["role"] == "assistant" and message.get("missing"):
+            _render_missing(message["missing"])
         else:
             st.markdown(message["content"])
+
+
+def _render_missing(missing: dict) -> None:
+    """展示缺失哪些学期的成绩单。"""
+    from app.core.calc import semester_label
+    current = missing.get("current_semester", 1)
+    missing_list = missing.get("missing_semesters", [])
+    received = missing.get("received", set())
+
+    st.markdown(f"**当前第 {current} 学期**")
+    if missing_list:
+        st.warning("检测到缺少以下学期的成绩单：\n\n" + "\n".join(f"- {label}" for label in missing_list))
+    else:
+        st.success("成绩单学期完整，无缺失。")
+
+    # 已覆盖的学期
+    if received:
+        covered = sorted([s for s in received if s is not None])
+        st.markdown("已覆盖的学期：" + "、".join(semester_label(s) for s in covered))
 
 
 def _plan_summary(plan: dict, intent: str) -> str:
@@ -162,6 +189,10 @@ def _plan_summary(plan: dict, intent: str) -> str:
 def _render_plan(plan: dict, intent: str) -> None:
     for warning in plan["warnings"]:
         st.warning(warning)
+
+    # LLM 生成的实质建议（最上方展示）
+    if plan.get("suggestion"):
+        st.markdown(plan["suggestion"])
 
     # 学分缺口（规划类都展示）
     st.markdown("**学分缺口统计**")
@@ -303,15 +334,35 @@ def _render_grades() -> None:
 
 def _render_edit() -> None:
     profile = st.session_state.profile
-    st.markdown(f"- **学院**：{profile['college']}\n- **专业**：{profile['major']}\n- **当前学期**：第 {profile['current_semester']} 学期\n- **入学年份**：{profile.get('enrollment_year', '—')}")
-    st.divider()
-    st.markdown("如需修改，请回到对应步骤：")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("修改学生信息（步骤 B）", use_container_width=True):
-            st.session_state.stage = 2
-            st.rerun()
-    with col2:
-        if st.button("修改过往学分（步骤 C）", use_container_width=True):
-            st.session_state.stage = 3
-            st.rerun()
+    st.markdown("修改学生信息（修改后不会清空已录入的成绩单数据）")
+
+    # 内联编辑，不跳回向导页面
+    catalog = st.session_state.parsed_catalog
+    colleges = list(dict.fromkeys(item["college"] for item in catalog))
+
+    college = st.selectbox("学院", colleges, index=colleges.index(profile["college"]) if profile["college"] in colleges else 0, key="edit_college")
+    majors = [item["major"] for item in catalog if item["college"] == college]
+    major = st.selectbox("专业", majors, index=majors.index(profile["major"]) if profile["major"] in majors else 0, key="edit_major")
+
+    col_year, col_month = st.columns(2)
+    with col_year:
+        year = st.number_input("入学年份", min_value=2000, max_value=2030, value=profile.get("enrollment_year", 2023), step=1, key="edit_year")
+    with col_month:
+        month = st.selectbox("入学月份", list(range(1, 13)), index=profile.get("enrollment_month", 9) - 1, key="edit_month")
+
+    current = st.number_input("当前学期", min_value=1, max_value=12, value=profile.get("current_semester", 1), step=1, key="edit_semester")
+
+    if st.button("保存修改", type="primary", use_container_width=True):
+        # 保留成绩单等已有数据，只更新基础信息
+        profile["college"] = college
+        profile["major"] = major
+        profile["enrollment_year"] = int(year)
+        profile["enrollment_month"] = int(month)
+        profile["current_semester"] = int(current)
+        st.session_state.profile = profile
+        # 同步保存到工作区
+        from app.core.workspace import save_profile
+        if st.session_state.get("current_workspace"):
+            save_profile(st.session_state.current_workspace, profile)
+        st.success("学生信息已更新。")
+        st.rerun()
