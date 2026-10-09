@@ -168,7 +168,10 @@ def build_plan(profile: dict, curriculum: dict, advice: dict[str, str] | None = 
     total_required = curriculum.get("credit_requirements", {}).get("毕业总学分")
     total_earned = sum(float(v) for v in profile.get("completed_credits", {}).values())
 
-    # 按模式排布课程到学期
+    # 已修课程回顾（之前学期）
+    completed_courses = _completed_courses(curriculum, completed)
+
+    # 按模式排布剩余课程
     timeline = _schedule(remaining, current, mode)
 
     # 重修安排
@@ -186,7 +189,18 @@ def build_plan(profile: dict, curriculum: dict, advice: dict[str, str] | None = 
         "warnings": warnings,
         "total_required": total_required,
         "total_earned": total_earned,
+        "completed_courses": completed_courses,   # 已修课程（用于回顾）
+        "current_semester": current,
     }
+
+
+def _completed_courses(curriculum: dict, completed: set[str]) -> list[dict]:
+    """返回已修课程列表（按学期排序），用于回顾之前的学期。"""
+    result = []
+    for course in curriculum.get("courses", []):
+        if course["name"] in completed:
+            result.append(_course_row(course))
+    return sorted(result, key=lambda c: int(c.get("semester", 0)) if str(c.get("semester", 0)).isdigit() else 0)
 
 
 def _schedule(courses: list[dict], current_semester: int, mode: str) -> dict[int, list[dict]]:

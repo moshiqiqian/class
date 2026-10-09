@@ -51,31 +51,43 @@ def index_documents(pdf_bytes: bytes, filename: str) -> int:
     return len(chunks)
 
 
-def answer(question: str, college: str, major: str, extra_context: str = "") -> tuple[str, list[dict]]:
+def answer(question: str, college: str, major: str, extra_context: str = "", full_text: str = "") -> tuple[str, list[dict]]:
+    """生成回答。优先使用「完整专业原文」full_text（质量最高），
+    否则回退到向量检索（retriever）。"""
     from langchain_community.vectorstores import Chroma
-    from langchain_openai import ChatOpenAI
 
-    if not INDEX_DIR.exists():
-        return "尚未建立 RAG 索引。请先在本页建立索引。", []
-    retriever = Chroma(persist_directory=str(INDEX_DIR), embedding_function=_embeddings(), collection_name="curriculum").as_retriever(search_kwargs={"k": 8})
-    documents = retriever.invoke(question)
-    if not documents and not extra_context:
-        return "该问题超出当前培养方案资料范围。", []
     key = os.getenv("DEEPSEEK_API_KEY", "")
-    citations = [{"page": document.metadata.get("page"), "source": document.metadata.get("source")} for document in documents]
+    citations: list[dict] = []
+    documents = []
+
+    # 策略 1：有完整原文时，直接用它（上下文最全，回答质量最好）
+    if full_text:
+        context = full_text
+        if extra_context:
+            context = f"{extra_context}\n\n{context}"
+    else:
+        # 策略 2：向量检索
+        if not INDEX_DIR.exists():
+            return "尚未建立 RAG 索引。请先在本页建立索引。", []
+        retriever = Chroma(persist_directory=str(INDEX_DIR), embedding_function=_embeddings(), collection_name="curriculum").as_retriever(search_kwargs={"k": 8})
+        documents = retriever.invoke(question)
+        if not documents and not extra_context:
+            return "该问题超出当前培养方案资料范围。", []
+        citations = [{"page": document.metadata.get("page"), "source": document.metadata.get("source")} for document in documents]
+        context = "\n\n".join(document.page_content for document in documents)
+        if extra_context:
+            context = f"{extra_context}\n\n{context}"
+
     if not key:
-        return "未配置 DEEPSEEK_API_KEY，无法生成基于检索资料的回答。", citations
-    context = "\n\n".join(document.page_content for document in documents)
-    if extra_context:
-        context = f"{extra_context}\n\n{context}"
+        return "未配置 DEEPSEEK_API_KEY，无法生成回答。", citations
     model = _llm()
     prompt = (
-        f"你是「{college} · {major}」的培养方案问答助手。请依据下列资料，详细、准确地回答学生的问题。\n\n"
-        "回答要求：\n"
-        "1. 只依据资料回答，不得编造；数字（学分、学时、学期）必须与资料完全一致。\n"
-        "2. 尽量完整：涉及多个要点时，分条列出；有数字要求时，给出具体数字。\n"
-        "3. 如果资料不足以回答，请明确说明「当前资料不足以回答该问题」，不要猜测。\n"
-        "4. 语气专业、简洁、友好。\n\n"
+        f"你是「{college} · {major}」的培养方案问答助手，负责回答学生关于培养方案、选课、学分、课程安排等问题。\n\n"
+        "请依据下列资料回答，做到：\n"
+        "1. 数字（学分、学时、学期）必须与资料一致，不得编造。\n"
+        "2. 回答完整、条理清晰：涉及多个要点时分条列出。\n"
+        "3. 优先给出结论，再补充细节说明。\n"
+        "4. 若资料确实不足，明确说明，不要臆测。\n\n"
         f"【资料】\n{context}\n\n"
         f"【问题】\n{question}"
     )

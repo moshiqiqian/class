@@ -142,7 +142,10 @@ def parse_pdf(pdf_bytes: bytes, filename: str) -> list[dict]:
             if not college or not major:
                 continue
             key = (college, major)
-            item = grouped.setdefault(key, {"college": college, "major": major, "credit_requirements": {}, "courses": [], "source_file": filename})
+            item = grouped.setdefault(key, {"college": college, "major": major, "credit_requirements": {}, "courses": [], "raw_text": [], "source_file": filename})
+            # 累积该专业的完整原文（培养目标、要求、学分、课程表等），供问答使用
+            if text.strip():
+                item["raw_text"].append(text.strip())
             for table in page.extract_tables():
                 requirements = _requirements_from_table(table)
                 if requirements:
@@ -154,6 +157,7 @@ def parse_pdf(pdf_bytes: bytes, filename: str) -> list[dict]:
     for item in grouped.values():
         unique = {(course["name"], course["semester"], course["credits"]): course for course in item["courses"]}
         item["courses"] = list(unique.values())
+        item["raw_text"] = "\n".join(item["raw_text"])
     return [item for item in grouped.values() if item["courses"]]
 
 
