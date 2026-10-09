@@ -172,3 +172,11 @@ def load_or_parse(pdf_bytes: bytes, filename: str, force: bool = False) -> tuple
     path.write_text(json.dumps(catalog, ensure_ascii=False, indent=2), encoding="utf-8")
     return catalog, False
 
+
+def load_catalog_by_cache(cache_file: str) -> list[dict]:
+    """按缓存文件名加载已解析的课程目录（用于工作区切换）。"""
+    path = CACHE_DIR / cache_file
+    if not path.exists():
+        raise FileNotFoundError(f"缓存文件不存在：{cache_file}")
+    return json.loads(path.read_text(encoding="utf-8"))
+

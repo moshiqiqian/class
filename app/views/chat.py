@@ -10,25 +10,49 @@ from app.core.rag import index_documents
 
 def _curriculum() -> dict:
     profile = st.session_state.profile
-    return next(item for item in st.session_state.parsed_catalog if item["college"] == profile["college"] and item["major"] == profile["major"])
+    if not profile:
+        return {}
+    for item in st.session_state.parsed_catalog:
+        if item["college"] == profile["college"] and item["major"] == profile["major"]:
+            return item
+    return {}
 
 
 def _ensure_index() -> None:
-    """首次进入对话页时自动建立 RAG 索引。"""
+    """首次进入对话页时自动建立 RAG 索引。数据缺失时静默跳过，避免白屏。"""
     if st.session_state.get("index_ready"):
         return
+    pdf_bytes = st.session_state.get("curriculum_pdf_bytes")
+    pdf_name = st.session_state.get("curriculum_pdf_name") or ""
+    if not pdf_bytes:
+        # 无 PDF 字节（可能来自工作区切换），标记跳过，问答时提示
+        st.session_state.index_ready = True
+        return
     try:
-        count = index_documents(st.session_state.curriculum_pdf_bytes, st.session_state.curriculum_pdf_name)
+        count = index_documents(pdf_bytes, pdf_name)
         st.session_state.index_ready = True
         if count:
             st.toast(f"已自动建立 RAG 索引（{count} 个文档块）。")
-    except (OSError, RuntimeError, ValueError):
-        st.session_state.index_ready = True
+    except Exception:
+        st.session_state.index_ready = True  # 失败也标记，避免反复尝试
 
 
 def render() -> None:
     profile = st.session_state.profile
+    if not profile:
+        # 数据不完整（如刷新后），友好提示而非白屏
+        st.warning("学生信息缺失，请回到信息采集步骤重新填写。")
+        if st.button("返回信息采集"):
+            st.session_state.stage = 2
+            st.rerun()
+        return
     curriculum = _curriculum()
+    if not curriculum:
+        st.warning("未找到对应专业的课程表，请确认工作区和专业选择。")
+        if st.button("返回工作区"):
+            st.session_state.stage = 1
+            st.rerun()
+        return
     _ensure_index()
 
     # 顶部信息栏

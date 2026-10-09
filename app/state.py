@@ -25,6 +25,10 @@ DEFAULTS: dict[str, object] = {
     "profile_current": 1,                # 确认后的当前学期
     "dialog_open": False,                # 学期确认弹窗是否打开
     "parsing": False,                    # 是否正在解析 PDF
+    # —— 工作区相关 ——
+    "current_workspace": "",             # 当前工作区名称
+    "workspace_panel": False,            # 工作区管理面板是否打开
+    "new_workspace": False,              # 新建工作区弹窗是否打开
 }
 
 

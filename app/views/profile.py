@@ -12,16 +12,45 @@ def render() -> None:
     catalog = st.session_state.parsed_catalog
     colleges = list(dict.fromkeys(item["college"] for item in catalog))
 
-    college = st.selectbox("学院", colleges, key="profile_college")
+    saved = st.session_state.profile  # 之前保存的画像（可能为 None）
+
+    # 若之前已保存过，顶部回显，让用户知道当前值
+    if saved:
+        st.info(
+            f"当前已保存：{saved['college']} · {saved['major']} · "
+            f"入学 {saved['enrollment_year']} 年 {saved['enrollment_month']} 月 · "
+            f"第 {saved['current_semester']} 学期"
+        )
+
+    # selectbox 默认值：优先用之前保存的，否则用 session key 记忆值
+    def _default_index(options: list, saved_value, session_key: str) -> int:
+        if saved_value in options:
+            return options.index(saved_value)
+        remembered = st.session_state.get(session_key)
+        if remembered in options:
+            return options.index(remembered)
+        return 0
+
+    college = st.selectbox(
+        "学院", colleges,
+        index=_default_index(colleges, saved["college"] if saved else None, "profile_college"),
+        key="profile_college",
+    )
     majors = [item["major"] for item in catalog if item["college"] == college]
-    major = st.selectbox("专业", majors, key="profile_major")
+    major = st.selectbox(
+        "专业", majors,
+        index=_default_index(majors, saved["major"] if saved else None, "profile_major"),
+        key="profile_major",
+    )
 
     min_year, max_year = enrollment_year_bounds()
     col_year, col_month = st.columns(2)
     with col_year:
-        year = st.number_input("入学年份", min_value=min_year, max_value=max_year, value=min(2023, max_year), step=1, key="profile_year")
+        default_year = saved["enrollment_year"] if saved else min(2023, max_year)
+        year = st.number_input("入学年份", min_value=min_year, max_value=max_year, value=default_year, step=1, key="profile_year")
     with col_month:
-        month = st.selectbox("入学月份", list(range(1, 13)), index=8, key="profile_month")
+        default_month = saved["enrollment_month"] if saved else 9
+        month = st.selectbox("入学月份", list(range(1, 13)), index=default_month - 1, key="profile_month")
 
     if st.button("确认信息，推算学期", type="primary", use_container_width=True):
         st.session_state.dialog_open = True
@@ -55,15 +84,17 @@ def _confirm_dialog(college: str, major: str, year: int, month: int) -> None:
 
 
 def _save_profile(college: str, major: str, year: int, month: int, current_semester: int) -> None:
+    # 保留已填写的学分数据（如果已有），避免返回时丢失
+    existing = st.session_state.profile or {}
     st.session_state.profile = {
         "college": college,
         "major": major,
         "enrollment_year": year,
         "enrollment_month": month,
         "current_semester": current_semester,
-        "completed_credits": {},
-        "completed_courses": [],
-        "failed_courses": [],
-        "missing_semesters": [],
+        "completed_credits": existing.get("completed_credits", {}),
+        "completed_courses": existing.get("completed_courses", []),
+        "failed_courses": existing.get("failed_courses", []),
+        "missing_semesters": existing.get("missing_semesters", []),
     }
     reset_after(2)

@@ -11,7 +11,12 @@ from app.state import reset_after
 
 def _curriculum() -> dict:
     profile = st.session_state.profile
-    return next(item for item in st.session_state.parsed_catalog if item["college"] == profile["college"] and item["major"] == profile["major"])
+    if not profile:
+        return {}
+    for item in st.session_state.parsed_catalog:
+        if item["college"] == profile["college"] and item["major"] == profile["major"]:
+            return item
+    return {}
 
 
 def _render_manual(profile: dict) -> dict[str, float]:
@@ -98,6 +103,14 @@ def _render_upload(profile: dict) -> tuple[list[dict], dict[str, float], list[st
 def render() -> None:
     st.header("步骤 C · 过往学分录入")
     profile = st.session_state.profile
+    if not profile:
+        st.warning("学生信息缺失，请先完成步骤 B。")
+        return
+
+    # 顶部回显：之前已保存的学分信息
+    if st.session_state.get("credits_confirmed") and profile.get("completed_credits"):
+        st.success("已保存过往学分信息（返回时会保留，可继续修改后重新确认）。")
+
     mode = st.radio("录入方式", ("手动填写", "上传成绩单分析"), horizontal=True, key="credit_mode")
 
     records, completed_credits, completed_courses, failed, missing = [], {}, [], [], []
@@ -106,19 +119,22 @@ def render() -> None:
     else:
         records, completed_credits, completed_courses, failed, missing = _render_upload(profile)
 
-    if mode == "手动填写" or records:
+    if mode == "手动填写" or records or profile.get("completed_credits"):
+        # 汇总：优先用本次计算结果，否则回显已保存的
+        if not completed_credits and profile.get("completed_credits"):
+            completed_credits = profile["completed_credits"]
         st.subheader("已获学分汇总")
         st.dataframe(pd.DataFrame([{"平台": k, "已获学分": v} for k, v in completed_credits.items()]), use_container_width=True)
 
         def _confirm() -> None:
             profile.update({
                 "completed_credits": completed_credits,
-                "completed_courses": completed_courses,
-                "failed_courses": failed,
-                "missing_semesters": missing,
+                "completed_courses": completed_courses or profile.get("completed_courses", []),
+                "failed_courses": failed or profile.get("failed_courses", []),
+                "missing_semesters": missing or profile.get("missing_semesters", []),
             })
             st.session_state.profile = profile
-            st.session_state.transcript_records = records
+            st.session_state.transcript_records = records or st.session_state.transcript_records
             st.session_state.credits_confirmed = True
             st.session_state.messages = []  # 清空旧对话
             reset_after(3)

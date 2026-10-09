@@ -7,4 +7,5 @@ __pycache__/
 data/chroma_db/
 data/cache/
 data/raw/
+data/workspaces.json
 !data/demo_courses.json
