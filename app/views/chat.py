@@ -95,6 +95,11 @@ def _render_chat(profile: dict, curriculum: dict) -> None:
             st.session_state.messages.append({"role": "assistant", "content": content, "plan": plan, "intent": intent})
             with st.chat_message("assistant"):
                 _render_plan(plan, intent)
+        elif result.get("review_result"):
+            review = result["review_result"]
+            st.session_state.messages.append({"role": "assistant", "content": "已修课程与绩点回顾", "review": review})
+            with st.chat_message("assistant"):
+                _render_review(review)
         else:
             answer = result.get("answer", "")
             st.session_state.messages.append({"role": "assistant", "content": answer})
@@ -108,6 +113,8 @@ def _render_message(message: dict) -> None:
     with st.chat_message(message["role"]):
         if message["role"] == "assistant" and message.get("plan"):
             _render_plan(message["plan"], message.get("intent", "plan"))
+        elif message["role"] == "assistant" and message.get("review"):
+            _render_review(message["review"])
         else:
             st.markdown(message["content"])
 
@@ -160,6 +167,26 @@ def _render_plan(plan: dict, intent: str) -> None:
     if plan["retakes"]:
         st.markdown("**补考 / 重修安排**")
         st.dataframe(pd.DataFrame(plan["retakes"]), use_container_width=True)
+
+
+def _render_review(review: dict) -> None:
+    """回顾：绩点 + 已修课程 + 学分进度。"""
+    if review.get("gpa"):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("绩点（GPA）", review["gpa"]["gpa"])
+        with col2:
+            st.metric("已获学分", review["gpa"]["total_credits"])
+
+    if review.get("total_required"):
+        st.progress(min(1.0, review["total_earned"] / review["total_required"]))
+        st.caption(f"学分进度：{review['total_earned']} / {review['total_required']}")
+
+    if review.get("completed_courses"):
+        st.markdown("**已修课程**")
+        st.dataframe(pd.DataFrame(review["completed_courses"]), use_container_width=True)
+    else:
+        st.info("暂无已修课程记录。请先在「过往学分」步骤上传成绩单。")
 
 
 def _render_grades() -> None:
