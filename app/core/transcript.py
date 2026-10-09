@@ -133,6 +133,9 @@ def records_from_dataframe(frame: pd.DataFrame, fallback_semester: int | None = 
             continue
         score = row[score_col]
         credits = _to_float(row[credits_col]) or 0.0
+        # 清洗：成绩为空/NaN 时跳过该行，避免后续计算异常
+        if score is None or (isinstance(score, float) and pd.isna(score)) or str(score).strip() in ("", "nan"):
+            continue
 
         # 学期：优先「学年+学期」推算，其次「学期」列，最后 fallback
         term = fallback_semester

@@ -53,8 +53,8 @@ def _render_upload(profile: dict) -> tuple[list[dict], dict[str, float], list[st
                 term = st.selectbox(f"{upload.name} 对应的学期", term_options, key=f"term_{index}")
             try:
                 records.extend(parse_upload(upload, int(term), enrollment_year))
-            except ValueError as error:
-                st.error(f"{upload.name}：{error}")
+            except Exception as error:
+                st.error(f"{upload.name} 解析失败：{error}")
         if records:
             st.session_state.transcript_records = records
             from app.core.workspace import save_transcripts
@@ -105,11 +105,6 @@ def _render_upload(profile: dict) -> tuple[list[dict], dict[str, float], list[st
         st.session_state.transcript_statuses = statuses
 
     completed_credits, completed_courses, failed = summarize_transcripts(records, {}, st.session_state.transcript_statuses)
-    return records, completed_credits, completed_courses, failed, missing
-    from app.core.workspace import save_transcripts
-    if st.session_state.get("current_workspace"):
-        save_transcripts(st.session_state.current_workspace, records)
-
     return records, completed_credits, completed_courses, failed, missing
 
 

@@ -34,6 +34,13 @@ def render() -> None:
             st.rerun()
         return
 
+    # 兜底同步：若 session 无成绩单但工作区有，则加载（避免三步骤能看到、对话页为空）
+    if not st.session_state.get("transcript_records") and st.session_state.get("current_workspace"):
+        from app.core.workspace import get_workspace
+        ws = get_workspace(st.session_state.current_workspace)
+        if ws and ws.get("transcripts"):
+            st.session_state.transcript_records = ws["transcripts"]
+
     # 左侧固定导航栏（不随对话滚动）
     with st.sidebar:
         _render_sidebar(profile)
@@ -66,7 +73,7 @@ def _render_sidebar(profile: dict) -> None:
 
     st.divider()
     st.markdown("**功能**")
-    st.radio("", ("💬 对话", "📊 成绩信息", "⚙️ 修改信息"), key="chat_page", label_visibility="collapsed")
+    st.radio("功能导航", ("💬 对话", "📊 成绩信息", "⚙️ 修改信息"), key="chat_page", label_visibility="collapsed")
 
 
 def _render_chat(profile: dict, curriculum: dict) -> None:
@@ -350,8 +357,8 @@ def _render_edit() -> None:
                 term = semester_from_academic_label(up.name, profile.get("enrollment_year")) or semester_from_filename(up.name)
                 try:
                     new_records.extend(parse_upload(up, int(term) if term else None, profile.get("enrollment_year")))
-                except ValueError as e:
-                    st.error(f"{up.name}：{e}")
+                except Exception as e:
+                    st.error(f"{up.name} 解析失败：{e}")
             if new_records:
                 # 合并（按课程+学期去重，新记录覆盖旧记录）
                 merged = {f"{r['course']}|{r.get('semester')}": r for r in records}
@@ -361,5 +368,4 @@ def _render_edit() -> None:
                 from app.core.workspace import save_transcripts
                 if st.session_state.get("current_workspace"):
                     save_transcripts(st.session_state.current_workspace, st.session_state.transcript_records)
-                st.success(f"已更新成绩单，共 {len(st.session_state.transcript_records)} 条记录。")
-                st.rerun()
+                st.toast(f"已更新成绩单，共 {len(st.session_state.transcript_records)} 条记录。")
