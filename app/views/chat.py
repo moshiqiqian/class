@@ -5,7 +5,6 @@ import streamlit as st
 
 from app.core.calc import build_plan, calculate_gpa
 from app.core.graph import build_graph
-from app.core.rag import index_documents
 
 
 def _curriculum() -> dict:
@@ -16,24 +15,6 @@ def _curriculum() -> dict:
         if item["college"] == profile["college"] and item["major"] == profile["major"]:
             return item
     return {}
-
-
-def _ensure_index() -> None:
-    """首次进入对话页时自动建立 RAG 索引。数据缺失时静默跳过。"""
-    if st.session_state.get("index_ready"):
-        return
-    pdf_bytes = st.session_state.get("curriculum_pdf_bytes")
-    pdf_name = st.session_state.get("curriculum_pdf_name") or ""
-    if not pdf_bytes:
-        st.session_state.index_ready = True
-        return
-    try:
-        count = index_documents(pdf_bytes, pdf_name)
-        st.session_state.index_ready = True
-        if count:
-            st.toast(f"已自动建立 RAG 索引（{count} 个文档块）。")
-    except Exception:
-        st.session_state.index_ready = True
 
 
 def render() -> None:
@@ -51,7 +32,6 @@ def render() -> None:
             st.session_state.stage = 1
             st.rerun()
         return
-    _ensure_index()
 
     # 顶部标题（简洁）
     st.markdown(f"#### 🎓 {profile['college']} · {profile['major']}")
