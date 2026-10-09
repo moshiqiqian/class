@@ -7,10 +7,12 @@ from typing import Any, TypedDict
 
 import streamlit as st
 from langgraph.graph import END, StateGraph
+from langgraph.prebuilt import ToolNode
 
 from app.core.calc import build_plan, calculate_gpa
 from app.core.prerequisite import advisory_notes
-from app.core.rag import answer, index_documents
+from app.core.rag import _llm, answer, index_documents, retrieve_sections
+from app.core.tools import ALL_TOOLS
 
 
 class GraphState(TypedDict, total=False):
@@ -23,6 +25,8 @@ class GraphState(TypedDict, total=False):
     citations: list[dict]
     plan_result: dict
     review_result: dict
+    # agent 工具循环用
+    messages: list
 
 
 # 意图分类：LLM 输出结构化 JSON，覆盖 4 类意图 + 规划模式
@@ -60,7 +64,6 @@ def _classify_intent(question: str) -> tuple[str, str]:
     key = os.getenv("DEEPSEEK_API_KEY", "")
     if key:
         try:
-            from app.core.rag import _llm
             raw = _llm().invoke(_INTENT_PROMPT.format(question=question)).content.strip()
             parsed = _parse_intent_json(raw)
             if parsed:
@@ -74,7 +77,6 @@ def _classify_intent(question: str) -> tuple[str, str]:
         except Exception:
             pass  # 回退关键词
 
-    # 关键词兜底
     if any(word in question for word in _GAP_KEYWORDS):
         return "gap", "balanced"
     if any(word in question for word in _REVIEW_KEYWORDS):
@@ -91,12 +93,10 @@ def _classify_intent(question: str) -> tuple[str, str]:
 
 
 def _parse_intent_json(raw: str) -> dict | None:
-    """解析 LLM 返回的 JSON，容忍多余文本。"""
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
         pass
-    # 提取 { ... } 子串再试
     match = re.search(r"\{.*\}", raw, re.DOTALL)
     if match:
         try:
@@ -114,7 +114,6 @@ def _plan_node(state: GraphState) -> dict[str, Any]:
 
 
 def _review_node(state: GraphState) -> dict[str, Any]:
-    """回顾已修课程 + 绩点。确定性计算，不依赖 LLM。"""
     profile, curriculum = state["profile"], state["curriculum"]
     records = st.session_state.get("transcript_records", [])
     plan = build_plan(profile, curriculum, mode="original")
@@ -129,27 +128,61 @@ def _review_node(state: GraphState) -> dict[str, Any]:
 
 
 def _answer_node(state: GraphState) -> dict[str, Any]:
+    """QA 节点：父文档检索 + 工具增强，交给 LLM 生成。"""
     profile = state["profile"]
     curriculum = state.get("curriculum") or {}
-    extra = _build_extra_context(curriculum)
-    full_text = curriculum.get("raw_text", "")
-    text, citations = answer(state["question"], profile["college"], profile["major"], extra_context=extra, full_text=full_text)
-    return {"answer": text, "citations": citations}
+    question = state["question"]
+
+    # 1. 父文档检索：碎片定位 → 还原章节
+    sections = retrieve_sections(question)
+    context_parts = []
+    for s in sections:
+        context_parts.append(f"【{s['title']}】\n{s['content']}")
+    # 2. 补充结构化学分要求
+    reqs = curriculum.get("credit_requirements") or {}
+    if reqs:
+        context_parts.append("【学分要求】\n" + "\n".join(f"- {k}：{v} 学分" for k, v in reqs.items()))
+    context = "\n\n".join(context_parts)
+
+    model = _llm().bind_tools(ALL_TOOLS)
+    prompt = (
+        f"你是「{profile['college']} · {profile['major']}」的培养方案问答助手。\n\n"
+        "你可以使用工具查询课程的学分、开课学期、学分要求等结构化信息。\n"
+        "回答要求：数字必须准确，条理清晰，优先给结论。若资料不足，明确说明。\n\n"
+        f"【检索到的资料】\n{context}\n\n"
+        f"【问题】\n{question}"
+    )
+    result = model.invoke(prompt)
+    answer_text = result.content if result.content else ""
+    # 若 LLM 想调工具，执行工具并把结果反馈给它再生成最终回答
+    if getattr(result, "tool_calls", None):
+        answer_text = _run_tool_loop(model, prompt, result.tool_calls)
+    return {"answer": answer_text, "citations": []}
 
 
-def _build_extra_context(curriculum: dict) -> str:
-    """把结构化解析出的学分要求拼成文本，注入问答上下文。"""
-    parts = []
-    requirements = curriculum.get("credit_requirements") or {}
-    if requirements:
-        lines = ["本专业各课程平台毕业学分要求："]
-        for platform, credits in requirements.items():
-            lines.append(f"- {platform}：{credits} 学分")
-        parts.append("\n".join(lines))
-    return "\n".join(parts)
+def _run_tool_loop(model, prompt: str, tool_calls: list) -> str:
+    """执行工具调用，并把结果反馈给 LLM 生成最终回答。"""
+    from langchain_core.messages import AIMessage, ToolMessage
+    from app.core.tools import ALL_TOOLS
+
+    tools_by_name = {t.name: t for t in ALL_TOOLS}
+    tool_messages = []
+    for call in tool_calls:
+        name = call.get("name")
+        args = call.get("args", {})
+        tool = tools_by_name.get(name)
+        if tool:
+            try:
+                result = tool.invoke(args)
+                tool_messages.append(ToolMessage(content=str(result), tool_call_id=call.get("id", name)))
+            except Exception as e:
+                tool_messages.append(ToolMessage(content=f"工具调用失败：{e}", tool_call_id=call.get("id", name)))
+    if not tool_messages:
+        return ""
+    followup = model.invoke([prompt, AIMessage(content="", tool_calls=tool_calls), *tool_messages])
+    return followup.content or ""
 
 
-@st.cache_resource(show_spinner=False)
 def build_graph():
     workflow = StateGraph(GraphState)
 
@@ -159,7 +192,6 @@ def build_graph():
     workflow.add_node("answer", _answer_node)
 
     workflow.set_entry_point("classify")
-    # 四种意图 → 三个处理节点（gap 和 plan 都走 plan，但 gap 只展示缺口）
     workflow.add_conditional_edges(
         "classify",
         lambda state: state["intent"],
