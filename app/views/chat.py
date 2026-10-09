@@ -26,9 +26,6 @@ def render() -> None:
             st.rerun()
         return
 
-    # 顶部：切换工作区（对话页内也能切换，切换后重新加载对应学生画像）
-    _render_workspace_switcher()
-
     curriculum = _curriculum()
     if not curriculum:
         st.warning("未找到对应专业的课程表，请确认工作区和专业选择。")
@@ -37,11 +34,11 @@ def render() -> None:
             st.rerun()
         return
 
-    # 顶部标题（简洁）
-    st.markdown(f"#### 🎓 {profile['college']} · {profile['major']}")
+    # 左侧固定导航栏（不随对话滚动）
+    with st.sidebar:
+        _render_sidebar(profile)
 
-    # 视图切换：用顶部 radio，避免 tabs 让 chat_input 不固定底部
-    page = st.radio("", ("💬 对话", "📊 成绩信息", "⚙️ 修改信息"), horizontal=True, key="chat_page")
+    page = st.session_state.get("chat_page", "💬 对话")
     if page == "💬 对话":
         _render_chat(profile, curriculum)
     elif page == "📊 成绩信息":
@@ -50,32 +47,26 @@ def render() -> None:
         _render_edit()
 
 
-def _render_workspace_switcher() -> None:
-    """对话页顶部的切换工作区控件。切换后重新加载学生画像，问问题不会串。"""
-    from app.core.workspace import list_workspaces, get_workspace
-    from app.core.extract_courses import load_catalog_by_cache
+def _render_sidebar(profile: dict) -> None:
+    """左侧固定栏：工作区信息 + 视图切换。"""
+    st.markdown(f"**🎓 {profile['major']}**")
+    st.caption(f"{profile['college']} · 第 {profile['current_semester']} 学期")
 
+    from app.core.workspace import list_workspaces, load_into_session
     workspaces = list_workspaces()
-    if not workspaces:
-        return
-    names = [w["name"] for w in workspaces]
-    current = st.session_state.get("current_workspace", "")
-    idx = names.index(current) if current in names else 0
+    if workspaces:
+        names = [w["name"] for w in workspaces]
+        current = st.session_state.get("current_workspace", "")
+        idx = names.index(current) if current in names else 0
+        st.markdown("**工作区**")
+        selected = st.selectbox("切换工作区", names, index=idx, key="chat_ws_switch", label_visibility="collapsed")
+        if st.button("切换", use_container_width=True):
+            if selected != current and load_into_session(selected):
+                st.rerun()
 
-    col_sel, col_back = st.columns([4, 1])
-    with col_sel:
-        selected = st.selectbox("工作区", names, index=idx, key="chat_ws_switch")
-    with col_back:
-        st.write("")
-        if st.button("↩ 返回向导", use_container_width=True):
-            st.session_state.stage = 1
-            st.rerun()
-
-    if selected != current:
-        # 切换工作区：完整重载（方案+学生+成绩单），rerun 重新渲染
-        from app.core.workspace import load_into_session
-        if load_into_session(selected):
-            st.rerun()
+    st.divider()
+    st.markdown("**功能**")
+    st.radio("", ("💬 对话", "📊 成绩信息", "⚙️ 修改信息"), key="chat_page", label_visibility="collapsed")
 
 
 def _render_chat(profile: dict, curriculum: dict) -> None:

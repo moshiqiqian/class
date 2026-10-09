@@ -95,6 +95,12 @@ def _render_upload(profile: dict) -> tuple[list[dict], dict[str, float], list[st
 
     completed_credits, completed_courses, failed = summarize_transcripts(records, {}, st.session_state.transcript_statuses)
 
+    # 解析出成绩单后立即保存到工作区（避免未点确认就丢失）
+    st.session_state.transcript_records = records
+    from app.core.workspace import save_transcripts
+    if st.session_state.get("current_workspace"):
+        save_transcripts(st.session_state.current_workspace, records)
+
     return records, completed_credits, completed_courses, failed, missing
 
 
@@ -116,6 +122,16 @@ def render() -> None:
         completed_credits = _render_manual(profile)
     else:
         records, completed_credits, completed_courses, failed, missing = _render_upload(profile)
+
+    # 回显：已保存的成绩单记录（切换页面/工作区后仍可见）
+    saved_records = st.session_state.get("transcript_records", [])
+    if mode == "上传成绩单分析" and not records and saved_records:
+        st.success(f"已保存 {len(saved_records)} 条成绩记录（无需重新上传）。")
+        with st.expander("查看已保存成绩单", expanded=False):
+            st.dataframe(pd.DataFrame([{
+                "课程名称": r["course"], "课程类型": r.get("platform") or "未匹配",
+                "成绩": r["score"], "学分": r["credits"], "学期": r.get("semester"), "绩点": r.get("gpa"),
+            } for r in saved_records]), use_container_width=True)
 
     # 回显：若本次没有计算（如切换模式或返回），用已保存的 profile 数据
     if not completed_credits and profile.get("completed_credits"):

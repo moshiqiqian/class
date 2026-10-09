@@ -26,7 +26,7 @@ def render() -> None:
     st.subheader("① 选择工作区")
     names = [w["name"] for w in workspaces]
 
-    col_sel, col_new, col_del = st.columns([3, 1, 1])
+    col_sel, col_new, col_del = st.columns([3, 1, 1], vertical_alignment="bottom")
     with col_sel:
         if names:
             idx = names.index(current) if current in names else 0
@@ -35,11 +35,9 @@ def render() -> None:
             selected = None
             st.info("暂无工作区，请先点击「新建工作区」。")
     with col_new:
-        st.write("")
         if st.button("🆕 新建工作区", use_container_width=True):
             st.session_state.new_ws_dialog = True
     with col_del:
-        st.write("")
         if current and current in names:
             if st.button("🗑️ 删除", use_container_width=True):
                 delete_workspace_by_name(current)
@@ -57,14 +55,17 @@ def render() -> None:
     # ============ 第二步：向当前工作区上传方案 ============
     if current:
         st.divider()
-        st.subheader("② 上传培养方案")
+        st.subheader("② 培养方案")
         ws = get_workspace(current)
         if ws and ws.get("cache_file"):
-            st.success(f"「{current}」已绑定方案：{ws.get('pdf_name')}")
-            st.caption("如需更换方案，请在下方重新上传。")
+            # 已绑定方案：只展示状态，上传区折叠隐藏
+            st.success(f"已绑定方案：**{ws.get('pdf_name')}**")
+            with st.expander("更换培养方案"):
+                _render_upload(ws)
         else:
+            # 未绑定：显示上传区
             st.warning(f"「{current}」尚未绑定培养方案，请上传 PDF。")
-        _render_upload(ws)
+            _render_upload(ws)
 
     # 进入下一步
     if st.session_state.get("parsed") and current:

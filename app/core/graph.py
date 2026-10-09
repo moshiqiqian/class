@@ -169,25 +169,43 @@ def _missing_node(state: GraphState) -> dict[str, Any]:
 
 
 def _answer_node(state: GraphState) -> dict[str, Any]:
-    """QA 节点：优先用当前工作区的完整原文（不串数据），向量检索兜底。"""
+    """问答节点：上下文含「培养方案原文 + 成绩单 + 学分要求」，由 LLM 针对问题作答。
+
+    这样「成绩最高的一门」「能修的所有课程」等具体问题能得到直接回答，
+    而不是机械返回整张成绩单。
+    """
     profile = state["profile"]
     curriculum = state.get("curriculum") or {}
     question = state["question"]
+    records = st.session_state.get("transcript_records", [])
 
-    # 上下文优先级：当前工作区 raw_text > 向量检索
-    full_text = curriculum.get("raw_text", "")
-    if full_text:
-        context = full_text
-    else:
-        from app.core.rag import retrieve_sections
-        sections = retrieve_sections(question)
-        context = "\n\n".join(f"【{s['title']}】\n{s['content']}" for s in sections)
+    context_parts = []
 
-    # 补充结构化学分要求
+    # 1. 学分要求（结构化）
     reqs = curriculum.get("credit_requirements") or {}
     if reqs:
-        context = "【学分要求】\n" + "\n".join(f"- {k}：{v} 学分" for k, v in reqs.items()) + "\n\n" + context
+        context_parts.append("【学分要求】\n" + "\n".join(f"- {k}：{v} 学分" for k, v in reqs.items()))
 
+    # 2. 成绩单（学生已修课程）
+    if records:
+        lines = ["【学生已修课程与成绩】"]
+        for r in records:
+            lines.append(f"- {r['course']}：{r.get('score')}分，{r.get('credits')}学分，第{r.get('semester')}学期，绩点{r.get('gpa')}")
+        context_parts.append("\n".join(lines))
+
+    # 3. 培养方案原文（课程表、培养目标等）
+    full_text = curriculum.get("raw_text", "")
+    if full_text:
+        context_parts.append("【培养方案原文】\n" + full_text)
+
+    # 若原文缺失，向量检索兜底
+    if not full_text:
+        from app.core.rag import retrieve_sections
+        sections = retrieve_sections(question)
+        if sections:
+            context_parts.append("【检索资料】\n" + "\n\n".join(f"【{s['title']}】\n{s['content']}" for s in sections))
+
+    context = "\n\n".join(context_parts)
     if not context.strip():
         return {"answer": "当前工作区尚未绑定培养方案或缺少资料，请先在上一步上传培养方案。"}
 
@@ -195,7 +213,10 @@ def _answer_node(state: GraphState) -> dict[str, Any]:
     prompt = (
         f"你是「{profile['college']} · {profile['major']}」的培养方案问答助手。\n\n"
         "你可以使用工具查询课程的学分、开课学期、学分要求等结构化信息。\n"
-        "回答要求：数字必须准确，条理清晰，优先给结论，给出实质内容而非空话。若资料不足，明确说明。\n\n"
+        "回答要求：\n"
+        "1. 针对学生的具体问题直接作答，不要机械罗列全部数据。\n"
+        "2. 例如问「成绩最高的一门」就答出具体哪门课；问「能修的所有课程」就完整列出课程。\n"
+        "3. 数字必须准确，条理清晰。若资料不足，明确说明。\n\n"
         f"【资料】\n{context}\n\n"
         f"【问题】\n{question}"
     )
@@ -234,18 +255,17 @@ def build_graph():
 
     workflow.add_node("classify", _classify)
     workflow.add_node("plan", _plan_node)
-    workflow.add_node("review", _review_node)
     workflow.add_node("missing", _missing_node)
     workflow.add_node("answer", _answer_node)
 
     workflow.set_entry_point("classify")
+    # review 和 qa 都交给 answer（含成绩单+方案上下文，能智能回答具体问题）
     workflow.add_conditional_edges(
         "classify",
         lambda state: state["intent"],
-        {"plan": "plan", "gap": "plan", "review": "review", "missing": "missing", "qa": "answer"},
+        {"plan": "plan", "gap": "plan", "review": "answer", "missing": "missing", "qa": "answer"},
     )
     workflow.add_edge("plan", END)
-    workflow.add_edge("review", END)
     workflow.add_edge("missing", END)
     workflow.add_edge("answer", END)
 
