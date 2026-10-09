@@ -32,7 +32,7 @@ _INTENT_PROMPT = (
     "判断学生问题属于哪一类，并判断规划模式。只输出 JSON，不要输出其他内容：\n"
     '{{"intent": "plan|gap|review|missing|semester_plan|qa", "mode": "early|balanced|original|none", "target_semester": 0}}\n\n'
     "分类规则：\n"
-    "- plan：选课规划（问「下学期选什么课」「怎么规划课程」「提前修完」「平均分配」「整个大学生涯怎么规划」「大一到大四全程规划」）\n"
+    "- plan：选课规划（问「下学期选什么课」「怎么规划课程」「提前修完」「平均分配」；若问「整个大学生涯/大一到大四/全程/大学四年怎么规划」则 mode=career）\n"
     "- semester_plan：为「某一个具体学期」规划课程（问「帮我规划第3学期」「重新规划第1学期」「第5学期该修什么」），target_semester 填该学期号(1-8)\n"
     "- gap：学分缺口（问「还差多少学分」「学分够不够毕业」）\n"
     "- review：查询「我自己」的成绩/绩点/已修课程（问「我绩点多少」「我学过哪些课」）\n"
@@ -95,6 +95,9 @@ def _classify_intent(question: str) -> tuple[str, str, int]:
                     target = _extract_semester(question)
                     if target == 0:
                         intent = "plan"
+                # plan 模式二次校正：提到全程/大一到大四/四年，强制 career
+                if intent == "plan" and any(w in question for w in ("整个大学", "全程", "大一到大四", "生涯", "全部重新规划", "大学四年", "四年")):
+                    mode = "career"
                 return intent, mode, target
         except Exception:
             pass  # 回退关键词
@@ -110,7 +113,8 @@ def _classify_intent(question: str) -> tuple[str, str, int]:
     if ("规划" in question or "重新规划" in question or "该修" in question) and _extract_semester(question):
         return "semester_plan", "balanced", _extract_semester(question)
     if any(word in question for word in _PLAN_MODE_KEYWORDS):
-        if "整个大学" in question or "全程" in question or "大一到大四" in question or "生涯" in question:
+        # career 优先：提到全程/大一到大四/全部重新规划
+        if any(w in question for w in ("整个大学", "全程", "大一到大四", "生涯", "全部重新规划", "四年")):
             return "plan", "career", 0
         if "提前" in question or "大四前" in question:
             return "plan", "early", 0
@@ -188,17 +192,35 @@ def _generate_plan_suggestion(profile: dict, plan: dict) -> str:
     if not key:
         return ""
     try:
-        gap_text = "、".join(f"{k}差{v['missing']}学分" for k, v in plan["gap"].items() if v["missing"] > 0)
-        next_courses = "、".join(c["课程名称"] for c in plan.get("next_courses", []))
+        mode = plan.get("mode", "balanced")
         total_earned = plan.get("total_earned", 0)
         total_required = plan.get("total_required", 0)
-        prompt = (
-            f"你是培养方案选课顾问。根据以下确定性计算的结果，用 2~4 句话给出实质性的选课建议。\n"
-            f"当前第 {profile['current_semester']} 学期，已获 {total_earned} / 需修 {total_required} 学分。\n"
-            f"学分缺口：{gap_text or '已满足要求'}。\n"
-            f"下学期课程：{next_courses or '无必修课'}。\n"
-            "建议要具体、可执行，指出优先补哪些、节奏如何安排。"
-        )
+        gap_text = "、".join(f"{k}差{v['missing']}学分" for k, v in plan.get("gap", {}).items() if v.get("missing", 0) > 0)
+
+        if mode == "career":
+            # 全生涯规划：说明约束，提示按实际调整
+            from app.core.calc import MAX_CREDITS_PER_SEMESTER, MAX_ELECTIVE_CREDITS_PER_SEMESTER
+            timeline_desc = "；".join(
+                f"第{t}学期 {len(rows)}门/共{sum(c['学分'] for c in rows):.0f}学分"
+                for t, rows in plan.get("timeline", {}).items()
+            )
+            prompt = (
+                "你是培养方案选课顾问。以下是一个「全大学生涯（大一到大四）规划」的确定性排课结果。\n"
+                f"已获 {total_earned} / 需修 {total_required} 学分；缺口：{gap_text or '已满足'}。\n"
+                f"排课结果：{timeline_desc}。\n"
+                f"约束：每学期总学分上限 {MAX_CREDITS_PER_SEMESTER:.0f}、选修学分上限 {MAX_ELECTIVE_CREDITS_PER_SEMESTER:.0f}。\n"
+                "请用 3~4 句话：(1) 说明这是按上限约束生成的适应性方案；(2) 提醒学生按自己实际情况（能力、兴趣、开课时间）调整；"
+                "(3) 如果学生能提供具体的每学期学分目标或偏好课程，可以据此优化。语气务实、简洁。"
+            )
+        else:
+            next_courses = "、".join(c["课程名称"] for c in plan.get("next_courses", []))
+            prompt = (
+                f"你是培养方案选课顾问。根据以下确定性计算的结果，用 2~4 句话给出实质性的选课建议。\n"
+                f"当前第 {profile['current_semester']} 学期，已获 {total_earned} / 需修 {total_required} 学分。\n"
+                f"学分缺口：{gap_text or '已满足要求'}。\n"
+                f"下学期课程：{next_courses or '无必修课'}。\n"
+                "建议要具体、可执行，指出优先补哪些、节奏如何安排。"
+            )
         return _llm().invoke(prompt).content.strip()
     except Exception:
         return ""

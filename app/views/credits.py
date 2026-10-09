@@ -35,43 +35,53 @@ def _render_manual(profile: dict) -> dict[str, float]:
 
 def _render_upload(profile: dict) -> tuple[list[dict], dict[str, float], list[str], list[dict], list[int]]:
     uploads = st.file_uploader(
-        "上传多个成绩单文件（可一次传多个学期，乱序也可以）",
+        "上传成绩单文件（可一次传多个学期，乱序也可以）",
         type=["pdf", "xlsx", "xls", "csv", "txt"],
         accept_multiple_files=True,
         key="transcript_uploads",
     )
     st.caption("提示：可前往教务网导出「全部成绩单」，一次上传即可。")
-    if not uploads:
+
+    records: list[dict] = []
+    if uploads:
+        # 有新上传：解析
+        enrollment_year = profile.get("enrollment_year")
+        term_options = list(range(1, max(2, profile["current_semester"] + 1)))
+        for index, upload in enumerate(uploads):
+            term = semester_from_academic_label(upload.name, enrollment_year) or semester_from_filename(upload.name)
+            if term is None:
+                term = st.selectbox(f"{upload.name} 对应的学期", term_options, key=f"term_{index}")
+            try:
+                records.extend(parse_upload(upload, int(term), enrollment_year))
+            except ValueError as error:
+                st.error(f"{upload.name}：{error}")
+        if records:
+            st.session_state.transcript_records = records
+            from app.core.workspace import save_transcripts
+            if st.session_state.get("current_workspace"):
+                save_transcripts(st.session_state.current_workspace, records)
+    else:
+        # 无新上传：直接使用之前保存的成绩单记录（同步）
+        records = st.session_state.get("transcript_records", [])
+        if records:
+            st.info(f"已加载之前保存的 {len(records)} 条成绩记录（无需重新上传）。如需更新请重新上传。")
+
+    if not records:
         st.info("请上传至少一份成绩单。")
         return [], {}, [], [], []
 
-    enrollment_year = profile.get("enrollment_year")
-    term_options = list(range(1, max(2, profile["current_semester"] + 1)))
-    records: list[dict] = []
-    for index, upload in enumerate(uploads):
-        term = semester_from_academic_label(upload.name, enrollment_year) or semester_from_filename(upload.name)
-        if term is None:
-            term = st.selectbox(f"{upload.name} 对应的学期", term_options, key=f"term_{index}")
-        try:
-            records.extend(parse_upload(upload, int(term), enrollment_year))
-        except ValueError as error:
-            st.error(f"{upload.name}：{error}")
-
-    if not records:
-        return [], {}, [], [], []
-
     # 明细表（中文表头 + 课程类型 + 绩点）
-    st.subheader("解析明细（请核对）")
-    detail = pd.DataFrame([{
-        "课程名称": r["course"],
-        "课程类型": r.get("platform") or "未匹配",
-        "成绩": r["score"],
-        "学分": r["credits"],
-        "学期": r["semester"],
-        "绩点": r.get("gpa"),
-        "是否及格": "是" if r["passed"] else "否",
-    } for r in records])
-    st.dataframe(detail, use_container_width=True)
+    with st.expander(f"成绩明细（{len(records)} 条，点击展开核对）", expanded=False):
+        detail = pd.DataFrame([{
+            "课程名称": r["course"],
+            "课程类型": r.get("platform") or "未匹配",
+            "成绩": r["score"],
+            "学分": r["credits"],
+            "学期": r["semester"],
+            "绩点": r.get("gpa"),
+            "是否及格": "是" if r["passed"] else "否",
+        } for r in records])
+        st.dataframe(detail, use_container_width=True)
 
     # 缺失学期监测
     received = {r["semester"] for r in records}
@@ -95,9 +105,7 @@ def _render_upload(profile: dict) -> tuple[list[dict], dict[str, float], list[st
         st.session_state.transcript_statuses = statuses
 
     completed_credits, completed_courses, failed = summarize_transcripts(records, {}, st.session_state.transcript_statuses)
-
-    # 解析出成绩单后立即保存到工作区（避免未点确认就丢失）
-    st.session_state.transcript_records = records
+    return records, completed_credits, completed_courses, failed, missing
     from app.core.workspace import save_transcripts
     if st.session_state.get("current_workspace"):
         save_transcripts(st.session_state.current_workspace, records)
@@ -123,16 +131,6 @@ def render() -> None:
         completed_credits = _render_manual(profile)
     else:
         records, completed_credits, completed_courses, failed, missing = _render_upload(profile)
-
-    # 回显：已保存的成绩单记录（切换页面/工作区后仍可见）
-    saved_records = st.session_state.get("transcript_records", [])
-    if mode == "上传成绩单分析" and not records and saved_records:
-        st.success(f"已保存 {len(saved_records)} 条成绩记录（无需重新上传）。")
-        with st.expander("查看已保存成绩单", expanded=False):
-            st.dataframe(pd.DataFrame([{
-                "课程名称": r["course"], "课程类型": r.get("platform") or "未匹配",
-                "成绩": r["score"], "学分": r["credits"], "学期": r.get("semester"), "绩点": r.get("gpa"),
-            } for r in saved_records]), use_container_width=True)
 
     # 回显：若本次没有计算（如切换模式或返回），用已保存的 profile 数据
     if not completed_credits and profile.get("completed_credits"):

@@ -333,3 +333,33 @@ def _render_edit() -> None:
             save_profile(st.session_state.current_workspace, profile)
         st.success("学生信息已更新。")
         st.rerun()
+
+    # ---- 重新上传/补充成绩单 ----
+    st.divider()
+    st.markdown("**成绩单管理**")
+    records = st.session_state.get("transcript_records", [])
+    if records:
+        st.caption(f"当前已有 {len(records)} 条成绩记录。")
+    with st.expander("上传 / 重新上传成绩单", expanded=False):
+        st.caption("提示：可前往教务网导出「全部成绩单」，一次上传即可。")
+        uploads = st.file_uploader("成绩单文件", type=["pdf", "xlsx", "xls", "csv", "txt"], accept_multiple_files=True, key="edit_transcript_uploads")
+        if uploads:
+            from app.core.transcript import parse_upload, semester_from_academic_label, semester_from_filename
+            new_records = []
+            for up in uploads:
+                term = semester_from_academic_label(up.name, profile.get("enrollment_year")) or semester_from_filename(up.name)
+                try:
+                    new_records.extend(parse_upload(up, int(term) if term else None, profile.get("enrollment_year")))
+                except ValueError as e:
+                    st.error(f"{up.name}：{e}")
+            if new_records:
+                # 合并（按课程+学期去重，新记录覆盖旧记录）
+                merged = {f"{r['course']}|{r.get('semester')}": r for r in records}
+                for r in new_records:
+                    merged[f"{r['course']}|{r.get('semester')}"] = r
+                st.session_state.transcript_records = list(merged.values())
+                from app.core.workspace import save_transcripts
+                if st.session_state.get("current_workspace"):
+                    save_transcripts(st.session_state.current_workspace, st.session_state.transcript_records)
+                st.success(f"已更新成绩单，共 {len(st.session_state.transcript_records)} 条记录。")
+                st.rerun()
