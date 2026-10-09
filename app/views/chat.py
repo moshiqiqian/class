@@ -40,13 +40,13 @@ def render() -> None:
     # 顶部标题（简洁）
     st.markdown(f"#### 🎓 {profile['college']} · {profile['major']}")
 
-    # 用 tabs 替代丑陋的竖排 radio
-    tab_chat, tab_grades, tab_edit = st.tabs(["💬 对话", "📊 成绩信息", "⚙️ 修改信息"])
-    with tab_chat:
+    # 视图切换：用顶部 radio，避免 tabs 让 chat_input 不固定底部
+    page = st.radio("", ("💬 对话", "📊 成绩信息", "⚙️ 修改信息"), horizontal=True, key="chat_page")
+    if page == "💬 对话":
         _render_chat(profile, curriculum)
-    with tab_grades:
+    elif page == "📊 成绩信息":
         _render_grades()
-    with tab_edit:
+    else:
         _render_edit()
 
 
