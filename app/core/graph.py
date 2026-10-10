@@ -286,8 +286,11 @@ def _answer_node(state: GraphState) -> dict[str, Any]:
     if reqs:
         context_parts.append("【学分要求】\n" + "\n".join(f"- {k}：{v} 学分" for k, v in reqs.items()))
 
-    # 2. 成绩单（学生已修课程）
+    # 2. 成绩单（学生已修课程）+ 系统计算的绩点（权威值，避免 LLM 算偏）
     if records:
+        from app.core.calc import calculate_gpa
+        gpa_info = calculate_gpa(records)
+        context_parts.append(f"【学生绩点（系统计算，请直接采用此值）】\nGPA = {gpa_info['gpa']}（4分制），已获学分 = {gpa_info['total_credits']}")
         lines = ["【学生已修课程与成绩】"]
         for r in records:
             lines.append(f"- {r['course']}：{r.get('score')}分，{r.get('credits')}学分，第{r.get('semester')}学期，绩点{r.get('gpa')}")

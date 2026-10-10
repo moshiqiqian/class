@@ -3,7 +3,7 @@ from __future__ import annotations
 import streamlit as st
 
 from app.state import initialize
-from app.views import chat, credits, manage, profile, upload
+from app.views import chat, credits, manage, profile, promote, upload
 
 
 def main() -> None:
@@ -13,6 +13,11 @@ def main() -> None:
     # 工作区管理页（独立二级页面）
     if st.session_state.get("manage_page"):
         manage.render()
+        return
+
+    # 升学管理页（独立二级页面）
+    if st.session_state.get("promote_page"):
+        promote.render()
         return
 
     # 阶段 4 是独立的对话页面，不显示向导导航

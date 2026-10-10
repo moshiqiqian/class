@@ -37,15 +37,18 @@ def render() -> None:
 
             col1, col2, col3 = st.columns(3)
             with col1:
-                if not is_current and st.button("切换到此工作区", key=f"sw_{name}", use_container_width=True):
-                    if load_into_session(name):
-                        st.session_state.manage_page = False
-                        st.rerun()
+                if is_current:
+                    st.button("当前工作区", key=f"cur_{name}", use_container_width=True, disabled=True)
+                else:
+                    if st.button("切换到此工作区", key=f"sw_{name}", use_container_width=True):
+                        if load_into_session(name):
+                            st.session_state.manage_page = False
+                            st.rerun()
             with col2:
                 if st.button("重新上传方案", key=f"re_{name}", use_container_width=True):
                     st.session_state[f"reupload_{name}"] = not st.session_state.get(f"reupload_{name}", False)
             with col3:
-                if not is_current and st.button("删除", key=f"del_{name}", use_container_width=True):
+                if st.button("删除", key=f"del_{name}", use_container_width=True, disabled=is_current):
                     delete_workspace_by_name(name)
                     st.rerun()
 

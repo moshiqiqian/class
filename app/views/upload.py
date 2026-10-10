@@ -19,6 +19,10 @@ from app.ui import footer
 def render() -> None:
     st.header("培养方案工作区")
 
+    # 显示上一次操作的结果提示（rerun 后一次性展示，避免 status 卡住）
+    if msg := st.session_state.pop("flash", None):
+        st.success(msg)
+
     workspaces = list_workspaces()
     current = st.session_state.get("current_workspace", "")
 
@@ -143,20 +147,18 @@ def _render_upload(workspace_name: str, ws: dict | None) -> None:
 
 
 def _parse_and_bind(workspace_name: str, upload, reuse: str = "") -> None:
-    """解析 PDF（或复用缓存）并绑定到指定工作区。完成后关闭弹窗。"""
+    """解析 PDF（或复用缓存）并绑定到指定工作区。"""
     pdf_bytes = upload.getvalue()
 
     if reuse:
         cache_file = reuse
     else:
-        with st.status("正在解析培养方案…文件较大，可能需要 1~2 分钟", expanded=True) as status:
+        with st.spinner("正在解析培养方案…（大文件可能需要 1~2 分钟，请勿刷新）"):
             try:
-                catalog, cached = load_or_parse(pdf_bytes, upload.name, force=False)
+                load_or_parse(pdf_bytes, upload.name, force=False)
             except (ValueError, OSError) as error:
-                status.update(label="解析失败", state="error")
-                st.error(str(error))
+                st.error(f"解析失败：{error}")
                 return
-            status.update(label=f"解析完成：{len(catalog)} 个专业", state="complete")
         cache_file = _cache_name(pdf_bytes)
 
     # 绑定方案到工作区
@@ -170,21 +172,20 @@ def _parse_and_bind(workspace_name: str, upload, reuse: str = "") -> None:
     st.session_state.parsed = True
     st.session_state.curriculum_pdf_name = upload.name
     st.session_state.curriculum_pdf_bytes = pdf_bytes
-    st.session_state.index_ready = False
     reset_after(1)
 
-    # 建立 RAG 索引（仅首次解析时；用于原文缺失时的兜底检索）
+    # 建立 RAG 索引（首次解析时；问答主路径用）
+    index_msg = ""
     if not reuse:
-        with st.status("正在建立检索索引…首次需加载模型，可能需要 1~2 分钟", expanded=True) as status:
+        with st.spinner("正在建立检索索引…（首次需加载模型）"):
             try:
                 from app.core.rag import index_documents
                 count = index_documents(pdf_bytes, upload.name)
-                st.session_state.index_ready = count > 0
-                status.update(label=f"索引建立完成（{count} 个片段）" if count else "索引已存在", state="complete")
+                index_msg = f"，已建立检索索引（{count} 个片段）" if count else ""
             except Exception as e:
-                status.update(label="索引建立失败（不影响结构化问答）", state="error")
-                st.warning(f"索引建立失败：{e}，结构化问答和选课规划仍可用。")
+                index_msg = f"（检索索引建立失败：{e}，不影响结构化问答）"
 
+    st.session_state.flash = f"✅ 培养方案解析并绑定成功{index_msg}。"
     st.rerun()
 
 

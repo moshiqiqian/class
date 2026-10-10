@@ -26,6 +26,9 @@ def render() -> None:
             st.rerun()
         return
 
+    if msg := st.session_state.pop("flash", None):
+        st.success(msg)
+
     curriculum = _curriculum()
     if not curriculum:
         st.warning("未找到对应专业的课程表，请确认工作区和专业选择。")
@@ -65,6 +68,9 @@ def _render_sidebar(profile: dict) -> None:
 
     st.divider()
     st.caption(f"当前工作区：{st.session_state.get('current_workspace', '—')}")
+    if st.button("📈 升学管理", use_container_width=True):
+        st.session_state.promote_page = True
+        st.rerun()
     if st.button("🗂️ 管理工作区", use_container_width=True):
         st.session_state.manage_page = True
         st.rerun()
@@ -337,20 +343,22 @@ def _render_career_plan(plan: dict) -> None:
         st.markdown("**选修课还需修读**：" + "、".join(f"{k} {v} 学分" for k, v in eg.items()))
         st.caption("建议把选修分散到剩余学期，每学期 1~2 门，避免集中在大四。")
 
-    # 逐学期模板
+    # 逐学期模板（始终展示 1-8 学期）
     st.markdown("**逐学期选课模板**")
     for term in range(1, 9):
         rows = p["timeline"].get(term, [])
         school = p.get("school", {}).get(term, [])
-        if not rows and not school:
-            continue
         year, half = (term + 1) // 2, "上" if term % 2 == 1 else "下"
         total = sum(c["学分"] for c in rows)
         st.markdown(f"**第 {term} 学期（大{['一','二','三','四'][year-1]}{half}）** · 需自选 {len(rows)} 门 / {total:.1f} 学分")
         if rows:
-            st.markdown("　需选：" + "、".join(f"{c['课程名称']}({c['学分']})" for c in rows))
+            st.markdown("　需自选（选修）：" + "、".join(f"{c['课程名称']}({c['学分']})" for c in rows))
+        else:
+            st.markdown("　需自选（选修）：无")
         if school:
             st.markdown("　学校安排：" + "、".join(f"{c['课程名称']}({c['学分']})" for c in school))
+        else:
+            st.markdown("　学校安排：无")
 
     # 导出 Excel
     try:
