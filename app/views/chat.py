@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from app.core.calc import build_plan, calculate_gpa, gpa_by_semester
+from app.core.calc import build_plan, calculate_gpa, gpa_by_semester, infer_semester
 from app.core.graph import build_graph
 
 
@@ -77,10 +77,21 @@ def _render_sidebar(profile: dict) -> None:
 
 
 def _render_chat(profile: dict, curriculum: dict) -> None:
-    if "messages" not in st.session_state:
-        st.session_state.messages = [
-            {"role": "assistant", "content": f"你好！我是 {profile['major']} 培养方案助手。\n\n你可以问我：\n- **学分缺口**：「我还差多少学分」\n- **选课规划**：「怎么规划才能大四前修完」「下学期选什么课」\n- **培养方案问答**：「本专业毕业最低学分是多少」「核心课程有哪些」"}
-        ]
+    # 没有历史消息时，先给出导入语（确保对话不为空）
+    if not st.session_state.get("messages"):
+        sem = profile.get('current_semester', 1)
+        intro = (
+            f"你好！我是「{profile['college']} · {profile['major']}」的**智能学业助手** 🤖\n\n"
+            f"我了解你所在专业的培养方案，以及你当前的学业情况（当前第 {sem} 学期）。"
+            f"你可以让我帮你做这些事：\n\n"
+            f"- 📊 **查学分缺口**：「我还差多少学分毕业」\n"
+            f"- 🎓 **毕业达标检查**：「我这样选能毕业吗」「还差什么才能毕业」\n"
+            f"- 📅 **选课规划**：「下学期选什么课」「帮我规划整个大学四年」「重新规划第3学期」\n"
+            f"- 🔁 **重修/补考**：「挂科了怎么重修」\n"
+            f"- 📖 **培养方案问答**：「培养目标是什么」「数据结构多少学分」「必修和选修的区别」\n\n"
+            f"直接输入你的问题即可 👇"
+        )
+        st.session_state.messages = [{"role": "assistant", "content": intro}]
 
     messages = st.session_state.messages
 
@@ -516,7 +527,14 @@ def _render_edit() -> None:
     with col_month:
         month = st.selectbox("入学月份", list(range(1, 13)), index=profile.get("enrollment_month", 9) - 1, key="edit_month")
 
-    current = st.number_input("当前学期", min_value=1, max_value=12, value=profile.get("current_semester", 1), step=1, key="edit_semester")
+    # 根据入学时间自动重算当前学期
+    guessed = infer_semester(int(year), int(month))
+    auto = st.checkbox("根据入学时间自动计算当前学期", value=True, key="edit_auto_sem")
+    if auto:
+        current = guessed
+        st.caption(f"当前学期自动计算为：**第 {guessed} 学期**（如需按休学等特殊情况调整，取消勾选后手动填写）")
+    else:
+        current = st.number_input("当前学期", min_value=1, max_value=12, value=profile.get("current_semester", 1), step=1, key="edit_semester")
 
     if st.button("保存修改", type="primary", use_container_width=True):
         # 保留成绩单等已有数据，只更新基础信息
@@ -530,7 +548,7 @@ def _render_edit() -> None:
         from app.core.workspace import save_profile
         if st.session_state.get("current_workspace"):
             save_profile(st.session_state.current_workspace, profile)
-        st.success("学生信息已更新。")
+        st.session_state.flash = f"✅ 学生信息已更新（当前第 {int(current)} 学期）。"
         st.rerun()
 
     # ---- 成绩单管理 ----
@@ -564,7 +582,7 @@ def _render_edit() -> None:
                     "学期": r.get("semester"), "绩点": r.get("gpa"),
                 } for r in new_records]), use_container_width=True)
 
-                if st.button("✓ 确认上传", type="primary", use_container_width=True):
+                if st.button("✓ 确认保存成绩单", type="primary", use_container_width=True):
                     # 合并（按课程+学期去重，新记录覆盖旧记录）
                     merged = {f"{r['course']}|{r.get('semester')}": r for r in records}
                     for r in new_records:
@@ -573,9 +591,6 @@ def _render_edit() -> None:
                     from app.core.workspace import save_transcripts
                     if st.session_state.get("current_workspace"):
                         save_transcripts(st.session_state.current_workspace, st.session_state.transcript_records)
-                    st.session_state.transcript_just_uploaded = True
+                    st.session_state.flash = f"✅ 成绩单已保存，共 {len(st.session_state.transcript_records)} 条记录，可在「📊 成绩信息」查看。"
                     st.rerun()
 
-    # 上传成功提示（rerun 后显示一次）
-    if st.session_state.pop("transcript_just_uploaded", False):
-        st.success(f"✓ 成绩单上传成功！已保存 {len(st.session_state.get('transcript_records', []))} 条记录，可切换到「📊 成绩信息」查看。")

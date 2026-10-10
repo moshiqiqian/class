@@ -58,6 +58,9 @@ def render() -> None:
     if st.session_state.get("dialog_open"):
         _confirm_dialog(college, major, int(year), int(month))
 
+    if st.session_state.get("freshman_confirm"):
+        _freshman_dialog()
+
 
 @st.dialog("确认当前学期")
 def _confirm_dialog(college: str, major: str, year: int, month: int) -> None:
@@ -71,14 +74,40 @@ def _confirm_dialog(college: str, major: str, year: int, month: int) -> None:
         if st.button("保存并继续", type="primary", use_container_width=True):
             _save_profile(college, major, year, month, max(1, guessed))
             st.session_state.dialog_open = False
-            st.session_state.stage = 3
-            st.rerun()
+            _next_stage(max(1, guessed))
     else:
         adjusted = st.number_input("调整后的当前学期", min_value=1, max_value=12, value=max(1, guessed), step=1)
         st.caption("允许按休学、提前修读等真实情况调整。")
         if st.button("保存调整并继续", type="primary", use_container_width=True):
             _save_profile(college, major, year, month, int(adjusted))
             st.session_state.dialog_open = False
+            _next_stage(int(adjusted))
+
+
+def _next_stage(current_semester: int) -> None:
+    """确定后续流程：第 1 学期（大一新生，无成绩单）→ 二次确认后直接进问答；否则进过往学分。"""
+    if current_semester <= 1:
+        st.session_state.freshman_confirm = True
+    else:
+        st.session_state.stage = 3
+    st.rerun()
+
+
+@st.dialog("大一新生确认")
+def _freshman_dialog() -> None:
+    st.markdown("你是**第 1 学期**（大一新生），**暂无期末成绩单**。")
+    st.markdown("- 过往学分视为 **0**（没有任何已修课程）\n- 可直接进入**智能问答与选课规划**")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("✓ 直接进入问答规划", type="primary", use_container_width=True):
+            st.session_state.freshman_confirm = False
+            st.session_state.credits_confirmed = True
+            st.session_state.transcript_records = []
+            st.session_state.stage = 4
+            st.rerun()
+    with col2:
+        if st.button("改为录入学分", use_container_width=True):
+            st.session_state.freshman_confirm = False
             st.session_state.stage = 3
             st.rerun()
 

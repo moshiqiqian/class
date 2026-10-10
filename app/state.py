@@ -32,6 +32,7 @@ DEFAULTS: dict[str, object] = {
     "new_ws_dialog": False,              # 新建工作区对话框
     "manage_page": False,                # 是否打开工作区管理页
     "promote_page": False,               # 是否打开升学管理页
+    "freshman_confirm": False,           # 大一新生二次确认
     "flash": None,                       # 一次性提示消息
 }
 

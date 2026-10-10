@@ -396,6 +396,8 @@ def _career_plan(required: list[dict], electives: list[dict], requirements: dict
         if gap <= 0:
             continue  # 已达标，不选
         pool = [c for c in electives if (c.get("platform") == platform or c.get("category") == platform) and c["name"] not in completed]
+        # 必选优先（备注含「必选」的选修必选）
+        pool.sort(key=lambda c: (0 if "必选" in str(c.get("note", "")) else 1, int(c.get("semester", 1))))
         picked = 0.0
 
         if strategy == "early":
