@@ -1,0 +1,13 @@
+# Streamlit 运行配置
+# 解决 Windows 上「长时间解析 + 连接抖动 → 白屏」的两大诱因：
+#   1) 解析/建索引时会往 data/ 写大量文件，文件监视器触发 rerun，打断正在运行的脚本
+#   2) fastReruns 默认 true：连接重连时会中断正在执行的脚本（解析被半途掐断）
+[server]
+# 关闭文件监视器（本项目管理用不到热重载；改了代码请手动重启）
+fileWatcherType = "none"
+# 上传体积上限（培养方案 PDF 可能较大）
+maxUploadSize = 300
+
+[runner]
+# 解析大 PDF 期间不要因为 WebSocket 重连而中断脚本
+fastReruns = false

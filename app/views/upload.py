@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 import streamlit as st
 
 from app.core.extract_courses import load_catalog_by_cache, load_or_parse
@@ -166,12 +168,18 @@ def _parse_and_bind(workspace_name: str, upload, reuse: str = "", force: bool = 
     if reuse and not force:
         cache_file = reuse
     else:
-        with st.spinner("正在解析培养方案…（大文件可能需要 1~2 分钟，请勿刷新）"):
-            try:
-                load_or_parse(pdf_bytes, upload.name, force=force)
-            except (ValueError, OSError) as error:
-                st.error(f"解析失败：{error}")
-                return
+        progress_bar = st.progress(0.0, text="正在解析培养方案…（首次较慢，请勿刷新）")
+
+        def _on_progress(done: int, total: int) -> None:
+            progress_bar.progress(min(done / max(total, 1), 1.0), text=f"正在解析培养方案… {done}/{total} 页")
+
+        try:
+            load_or_parse(pdf_bytes, upload.name, force=force, progress=_on_progress)
+        except (ValueError, OSError) as error:
+            progress_bar.empty()
+            st.error(f"解析失败：{error}")
+            return
+        progress_bar.empty()
         cache_file = _cache_name(pdf_bytes)
 
     # 绑定方案到工作区
@@ -187,19 +195,36 @@ def _parse_and_bind(workspace_name: str, upload, reuse: str = "", force: bool = 
     st.session_state.curriculum_pdf_bytes = pdf_bytes
     reset_after(1)
 
-    # 建立 RAG 索引（首次解析时；问答主路径用）
+    # 建立 RAG 索引：放到后台线程，避免长时间阻塞导致界面无响应/白屏。
+    # 索引就绪前问答会回退到完整原文，功能不受影响。
     index_msg = ""
     if not reuse or force:
-        with st.spinner("正在建立检索索引…（首次需加载模型）"):
-            try:
-                from app.core.rag import index_documents
-                count = index_documents(pdf_bytes, upload.name)
-                index_msg = f"，已建立检索索引（{count} 个片段）" if count else ""
-            except Exception as e:
-                index_msg = f"（检索索引建立失败：{e}，不影响结构化问答）"
+        _start_background_index(pdf_bytes, upload.name)
+        index_msg = "，检索索引正在后台建立（不影响使用）"
 
     st.session_state.flash = f"✅ 培养方案解析并绑定成功{index_msg}。"
     st.rerun()
+
+
+_INDEX_LOCK = threading.Lock()
+
+
+def _start_background_index(pdf_bytes: bytes, filename: str) -> None:
+    """后台线程建立 RAG 索引；失败静默（问答会回退到完整原文）。"""
+
+    def _work() -> None:
+        if not _INDEX_LOCK.acquire(blocking=False):
+            return  # 已有索引任务在跑，避免并发写向量库
+        try:
+            from app.core.rag import build_embeddings, index_documents
+
+            index_documents(pdf_bytes, filename, embeddings=build_embeddings())
+        except Exception:
+            pass
+        finally:
+            _INDEX_LOCK.release()
+
+    threading.Thread(target=_work, name="rag-index", daemon=True).start()
 
 
 def _cache_name(pdf_bytes: bytes) -> str:

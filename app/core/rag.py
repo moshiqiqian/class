@@ -22,6 +22,11 @@ _CHAPTER_RE = re.compile(r"^[一二三四五六七八九十]+、", re.MULTILINE)
 @st.cache_resource(show_spinner=False)
 def _embeddings():
     """缓存 embedding 模型，避免每次问答重复加载（加载 bge-m3 很慢）。"""
+    return build_embeddings()
+
+
+def build_embeddings():
+    """直接构造 embedding（不经过 Streamlit 缓存），供后台线程使用。"""
     from langchain_huggingface import HuggingFaceEmbeddings
     return HuggingFaceEmbeddings(model_name="BAAI/bge-m3", model_kwargs={"device": "cpu"}, encode_kwargs={"normalize_embeddings": True})
 
@@ -72,10 +77,12 @@ def _save_parents(parents: dict[str, dict]) -> None:
     PARENTS_FILE.write_text(json.dumps(parents, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def index_documents(pdf_bytes: bytes, filename: str) -> int:
+def index_documents(pdf_bytes: bytes, filename: str, full_text: str = "", embeddings=None) -> int:
     """建立「父文档检索」索引：
     - 按章节切父块，父块存 parents.json
     - 父块切碎片，碎片向量化入 Chroma（碎片 metadata 记录 parent_id）
+
+    full_text 可传入已提取的全文（复用解析阶段的旁车缓存），避免重复读取 PDF。
     """
     from io import BytesIO
 
@@ -87,9 +94,17 @@ def index_documents(pdf_bytes: bytes, filename: str) -> int:
     if marker.exists() and marker.read_text() == digest:
         return 0
 
-    # 1. 提取全文
-    with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
-        full_text = "\n".join(page.extract_text() or "" for page in pdf.pages if page.extract_text())
+    # 1. 取全文：优先复用解析阶段已提取的旁车缓存，否则再读 PDF
+    if not full_text:
+        try:
+            sidecar = Path("data/cache") / f"fulltext-{digest[:16]}.txt"
+            if sidecar.exists():
+                full_text = sidecar.read_text(encoding="utf-8")
+        except OSError:
+            full_text = ""
+    if not full_text:
+        with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
+            full_text = "\n".join(page.extract_text() or "" for page in pdf.pages if page.extract_text())
 
     # 2. 按章节切父块
     chapters = _split_chapters(full_text)
@@ -110,7 +125,7 @@ def index_documents(pdf_bytes: bytes, filename: str) -> int:
     # 3. 存父块 + 碎片入向量库
     INDEX_DIR.mkdir(parents=True, exist_ok=True)
     _save_parents(parents)
-    Chroma.from_documents(all_chunks, _embeddings(), persist_directory=str(INDEX_DIR), collection_name="curriculum")
+    Chroma.from_documents(all_chunks, embeddings or _embeddings(), persist_directory=str(INDEX_DIR), collection_name="curriculum")
     marker.write_text(digest)
     return len(all_chunks)
 

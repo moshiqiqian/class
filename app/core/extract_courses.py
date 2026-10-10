@@ -186,30 +186,49 @@ def _fill_merged(rows: list[dict]) -> None:
         i = j
 
 
-def parse_pdf(pdf_bytes: bytes, filename: str) -> list[dict]:
-    """Extract a best-effort catalog, keeping all results local and cacheable."""
+# 只有疑似含课程表/学分表的页面才做昂贵的表格抽取（page.extract_tables 很慢）
+_TABLE_HINT = ("课程名称", "开课学期", "修读学期", "课程性质", "课程平台", "课程类别", "毕业最低")
+
+
+def parse_pdf(pdf_bytes: bytes, filename: str, progress=None) -> list[dict]:
+    """Extract a best-effort catalog, keeping all results local and cacheable.
+
+    progress(done, total) 可选回调，用于前端展示进度、避免用户误以为卡死。
+    """
     grouped: OrderedDict[tuple[str, str], dict] = OrderedDict()
     last_categories: dict[tuple[str, str], str] = {}
     college = major = ""
+    full_pages: list[str] = []
     with pdfplumber.open(BytesIO(pdf_bytes)) as document:
-        for page in document.pages:
+        total = len(document.pages)
+        for index, page in enumerate(document.pages, start=1):
             text = page.extract_text() or ""
-            college, major = _context(text, college, major)
-            if not college or not major:
-                continue
-            key = (college, major)
-            item = grouped.setdefault(key, {"college": college, "major": major, "credit_requirements": {}, "courses": [], "raw_text": [], "source_file": filename})
-            # 累积该专业的完整原文（培养目标、要求、学分、课程表等），供问答使用
             if text.strip():
-                item["raw_text"].append(text.strip())
-            for table in page.extract_tables():
-                requirements = _requirements_from_table(table)
-                if requirements:
-                    item["credit_requirements"].update(requirements)
-                courses, last_category = _courses_from_table(table, college, major, last_categories.get(key, "未分类"))
-                if courses:
-                    item["courses"].extend(courses)
-                    last_categories[key] = last_category
+                full_pages.append(text.strip())
+            college, major = _context(text, college, major)
+            if college and major:
+                key = (college, major)
+                item = grouped.setdefault(key, {"college": college, "major": major, "credit_requirements": {}, "courses": [], "raw_text": [], "source_file": filename})
+                # 累积该专业的完整原文（培养目标、要求、学分、课程表等），供问答使用
+                if text.strip():
+                    item["raw_text"].append(text.strip())
+                # 仅对疑似表格页抽取表格（绝大多数叙述页跳过，显著提速）
+                if any(hint in text for hint in _TABLE_HINT):
+                    for table in page.extract_tables():
+                        requirements = _requirements_from_table(table)
+                        if requirements:
+                            item["credit_requirements"].update(requirements)
+                        courses, last_category = _courses_from_table(table, college, major, last_categories.get(key, "未分类"))
+                        if courses:
+                            item["courses"].extend(courses)
+                            last_categories[key] = last_category
+            if progress:
+                progress(index, total)
+    # 写全文旁车缓存：供 RAG 建索引复用，避免再次读取整个 PDF（省一遍全页解析）
+    try:
+        fulltext_path(pdf_bytes).write_text("\n".join(full_pages), encoding="utf-8")
+    except OSError:
+        pass
     for item in grouped.values():
         unique = {(course["name"], course["semester"], course["credits"]): course for course in item["courses"]}
         item["courses"] = list(unique.values())
@@ -222,11 +241,16 @@ def cache_path(pdf_bytes: bytes) -> Path:
     return CACHE_DIR / f"catalog-{hashlib.sha256(pdf_bytes).hexdigest()[:16]}.json"
 
 
-def load_or_parse(pdf_bytes: bytes, filename: str, force: bool = False) -> tuple[list[dict], bool]:
+def fulltext_path(pdf_bytes: bytes) -> Path:
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    return CACHE_DIR / f"fulltext-{hashlib.sha256(pdf_bytes).hexdigest()[:16]}.txt"
+
+
+def load_or_parse(pdf_bytes: bytes, filename: str, force: bool = False, progress=None) -> tuple[list[dict], bool]:
     path = cache_path(pdf_bytes)
     if path.exists() and not force:
         return json.loads(path.read_text(encoding="utf-8")), True
-    catalog = parse_pdf(pdf_bytes, filename)
+    catalog = parse_pdf(pdf_bytes, filename, progress=progress)
     if not catalog:
         raise ValueError("未识别到可用课程表。请确认 PDF 含有文字层和课程设置表。")
     path.write_text(json.dumps(catalog, ensure_ascii=False, indent=2), encoding="utf-8")
