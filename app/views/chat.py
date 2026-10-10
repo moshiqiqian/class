@@ -229,44 +229,67 @@ def _render_plan(plan: dict, intent: str) -> None:
 
 
 def _render_career_plan(plan: dict) -> None:
-    """全大学生涯规划：详细叙述 + 逐学期说明（不只是表格）。"""
-    timeline = plan.get("timeline", {})
+    """全大学生涯规划：多套方案 + 当前学期选课 + 逐学期模板。"""
+    st.markdown("### 📋 大学四年整体规划")
+
+    # 兼容单方案（旧结构）
+    plans = plan.get("plans")
+    if not plans:
+        timeline = plan.get("timeline", {})
+        plans = [{"name": "整体规划", "desc": "", "timeline": timeline, "loads": {t: sum(c["学分"] for c in rows) for t, rows in timeline.items()}, "current_courses": []}]
+
+    current = plan.get("current_semester", 1)
     total_required = plan.get("total_required")
 
-    # 总览叙述
-    st.markdown("### 📋 大学四年整体规划")
-    total_planned = sum(sum(c["学分"] for c in rows) for rows in timeline.values())
     st.markdown(
-        f"本规划基于你的培养方案，从**大一到大四**逐年逐学期安排课程。\n\n"
-        f"- **规划总学分**：{total_planned:.1f}" + (f"（毕业需修 {total_required}）" if total_required else "") + "\n"
-        f"- **安排原则**：必修课按培养方案开课学期安排；选修课只修够要求学分即可，不必全修。\n"
-        f"- ⚠️ **重要**：课程只在培养方案规定的**开课学期**可选，**不可挪到其他学期**。如需在某学期多修选修，请从该学期**实际开设**的选修课中选择。"
+        f"- **当前学期**：第 {current} 学期\n"
+        f"- **毕业需修**：{total_required if total_required else '—'} 学分\n"
+        f"- ⚠️ **约束**：必修课固定在培养方案**开课学期**不可挪动；选修课从各学期**实际开设**的课程中选择。"
     )
-
     st.divider()
 
-    # 逐学期详细说明
-    for term, rows in timeline.items():
-        total = sum(c["学分"] for c in rows)
-        required = [c for c in rows if c.get("性质") == "必修"]
-        elective = [c for c in rows if c.get("性质") == "选修"]
-        year = (term + 1) // 2
-        half = "上" if term % 2 == 1 else "下"
+    # 逐方案展示
+    for idx, p in enumerate(plans):
+        st.markdown(f"## 方案 {idx+1}：{p['name']}")
+        st.caption(p.get("desc", ""))
 
-        st.markdown(f"#### 第 {term} 学期（大{['一','二','三','四'][year-1]}{half}）")
-        st.markdown(
-            f"本学期共 **{len(rows)} 门课、{total:.1f} 学分**"
-            f"（必修 {len(required)} 门/{sum(c['学分'] for c in required):.1f} 学分，"
-            f"选修 {len(elective)} 门/{sum(c['学分'] for c in elective):.1f} 学分）。"
-        )
-        if required:
-            st.markdown("**必修**：" + "、".join(f"{c['课程名称']}({c['学分']})" for c in required))
-        if elective:
-            st.markdown("**选修**：" + "、".join(f"{c['课程名称']}({c['学分']})" for c in elective))
-        st.dataframe(pd.DataFrame(rows), use_container_width=True)
+        # 当前学期具体选课（重点！）
+        cur_courses = p.get("current_courses", [])
+        if cur_courses:
+            cur_credits = sum(c["学分"] for c in cur_courses)
+            st.success(
+                f"**本学期（第 {current} 学期）建议选修 {len(cur_courses)} 门课、共 {cur_credits:.1f} 学分：**"
+            )
+            st.dataframe(pd.DataFrame(cur_courses), use_container_width=True)
+        elif current <= 8:
+            st.info(f"第 {current} 学期该方案无课程安排。")
 
-    st.divider()
-    st.info("💡 这是按学分上限生成的**适应性方案**。如果你能提供每学期的具体学分目标、偏好课程，或某些课程的开课限制，我可以据此重新优化。请结合自己实际情况选修。")
+        # 各学期负担
+        loads = p.get("loads", {})
+        if loads:
+            load_df = pd.DataFrame([
+                {"学期": f"第{t}学期（大{['一','二','三','四'][(t-1)//2]}{'上' if t%2==1 else '下'}）", "学分": v}
+                for t, v in loads.items()
+            ])
+            st.markdown("**各学期负担**")
+            st.dataframe(load_df, use_container_width=True)
+
+        # 完整逐学期模板
+        with st.expander("查看完整逐学期选课模板", expanded=False):
+            for term, rows in p["timeline"].items():
+                total = sum(c["学分"] for c in rows)
+                required = [c for c in rows if c.get("性质") == "必修"]
+                elective = [c for c in rows if c.get("性质") == "选修"]
+                year = (term + 1) // 2
+                half = "上" if term % 2 == 1 else "下"
+                st.markdown(f"**第 {term} 学期（大{['一','二','三','四'][year-1]}{half}）** · {len(rows)} 门 / {total:.1f} 学分")
+                if required:
+                    st.markdown("　必修：" + "、".join(f"{c['课程名称']}({c['学分']})" for c in required))
+                if elective:
+                    st.markdown("　选修：" + "、" .join(f"{c['课程名称']}({c['学分']})" for c in elective))
+        st.divider()
+
+    st.info("💡 以上方案在「选修课选择策略」上不同。必修课固定在开课学期；如需按某学期更多选修，请从该学期实际开设的选修中选择。可结合自身能力、兴趣调整。")
 
 
 def _render_review(review: dict) -> None:

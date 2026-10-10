@@ -332,67 +332,115 @@ MAX_CREDITS_PER_SEMESTER = 26.0
 MAX_ELECTIVE_CREDITS_PER_SEMESTER = 8.0
 
 
-def build_career_plan(profile: dict, curriculum: dict) -> dict:
-    """全大学生涯整体规划（第 1 至第 8 学期全覆盖）。
+def build_career_plans(profile: dict, curriculum: dict) -> dict:
+    """全大学生涯规划：产出多套可选方案（第 1-8 学期全覆盖）。
 
-    规则（关键）：
-    - 忽略学生当前进度，当作大一新生，完整规划培养方案全部课程。
-    - **课程只在培养方案规定的开课学期可选，不可挪到其他学期**。
-    - 必修课：全部按原始开课学期安排。
-    - 选修课：只需修够各平台要求的选修学分，从开设的选修课中挑选。
+    约束：必修课固定在开课学期不可挪动；选修课从各学期实际开设的课程中选择。
+    方案差异体现在「选修课的选择策略」上。
     """
     requirements = curriculum.get("credit_requirements", {})
-
     courses = curriculum.get("courses", [])
-    required_courses = [c for c in courses if c.get("required", True)]
-    elective_courses = [c for c in courses if not c.get("required", True)]
+    required = [c for c in courses if c.get("required", True)]
+    electives = [c for c in courses if not c.get("required", True)]
+    current = int(profile.get("current_semester", 1))
 
+    plans = [
+        _career_plan(required, electives, requirements, strategy="balanced"),
+        _career_plan(required, electives, requirements, strategy="early"),
+    ]
+    for p in plans:
+        p["current_courses"] = p["timeline"].get(current, [])
+
+    return {
+        "mode": "career",
+        "plans": plans,
+        "current_semester": current,
+        "total_required": requirements.get("毕业总学分"),
+        "gap": {k: {"required": v, "earned": 0, "missing": v} for k, v in requirements.items() if k != "毕业总学分"},
+        "note": "必修课固定在培养方案开课学期；选修课从各学期实际开设的课程中选择。",
+    }
+
+
+def _career_plan(required: list[dict], electives: list[dict], requirements: dict, strategy: str) -> dict:
+    """生成一套生涯方案。strategy: balanced=均衡 / early=提前集中。"""
     timeline: dict[int, list[dict]] = {s: [] for s in range(1, 9)}
 
-    # 1. 必修课：全部按原始开课学期安排（不挪动）
-    for c in required_courses:
+    # 必修：全部按开课学期（不可挪动）
+    for c in required:
         term = max(1, min(8, int(c.get("semester", 1))))
         row = _course_row(c)
         row["状态"] = "必修"
         timeline[term].append(row)
 
-    # 2. 选修课：按平台需求挑选，放在各自开课学期
+    # 选修：按平台需求挑选
     for platform, req in requirements.items():
         if platform == "毕业总学分" or "选修" not in platform:
             continue
         need = float(req)
-        pool = sorted(
-            [c for c in elective_courses if c.get("platform") == platform or c.get("category") == platform],
-            key=lambda c: int(c.get("semester", 1)),
-        )
+        pool = [c for c in electives if c.get("platform") == platform or c.get("category") == platform]
         picked = 0.0
-        for c in pool:
-            if picked >= need:
-                break
-            term = max(1, min(8, int(c.get("semester", 1))))
-            row = _course_row(c)
-            row["状态"] = "建议选修"
-            timeline[term].append(row)
-            picked += float(c["credits"])
+
+        if strategy == "early":
+            # 提前型：优先选开课学期早的选修，尽量往前集中
+            for c in sorted(pool, key=lambda c: int(c.get("semester", 1))):
+                if picked >= need:
+                    break
+                term = max(1, min(8, int(c.get("semester", 1))))
+                row = _course_row(c)
+                row["状态"] = "建议选修"
+                timeline[term].append(row)
+                picked += float(c["credits"])
+        else:
+            # 均衡型：按学期轮流取，让各学期都有选修
+            by_sem: dict[int, list[dict]] = {}
+            for c in pool:
+                by_sem.setdefault(max(1, min(8, int(c.get("semester", 1)))), []).append(c)
+            terms = sorted(by_sem)
+            i = 0
+            while picked < need and any(by_sem.values()):
+                t = terms[i % len(terms)]
+                if by_sem[t]:
+                    c = by_sem[t].pop(0)
+                    row = _course_row(c)
+                    row["状态"] = "建议选修"
+                    timeline[t].append(row)
+                    picked += float(c["credits"])
+                i += 1
 
     result_timeline = {t: rows for t, rows in timeline.items() if rows}
 
-    # 每学期统计
-    summary = {}
-    for t, rows in result_timeline.items():
-        summary[t] = {
-            "total": round(sum(c["学分"] for c in rows), 1),
-            "required": round(sum(c["学分"] for c in rows if c["性质"] == "必修"), 1),
-            "elective": round(sum(c["学分"] for c in rows if c["性质"] == "选修"), 1),
-        }
+    # 每学期负担
+    loads = {t: round(sum(c["学分"] for c in rows), 1) for t, rows in result_timeline.items()}
+    # 大四（第 7-8 学期）总学分
+    senior_credits = round(loads.get(7, 0) + loads.get(8, 0), 1)
 
+    names = {"balanced": "稳妥均衡型", "early": "提前集中型"}
+    descs = {
+        "balanced": "各学期负担较均衡，选修分散到不同学期，适合稳步推进。",
+        "early": "选修尽量安排在开课较早的学期，为大四腾出更多时间（如实习、考研、毕业设计）。",
+    }
+    return {
+        "key": strategy,
+        "name": names[strategy],
+        "desc": descs[strategy],
+        "timeline": result_timeline,
+        "loads": loads,
+        "senior_credits": senior_credits,
+        "total_planned": round(sum(loads.values()), 1),
+    }
+
+
+def build_career_plan(profile: dict, curriculum: dict) -> dict:
+    """兼容旧接口：返回单套（均衡型）生涯规划。"""
+    multi = build_career_plans(profile, curriculum)
+    first = multi["plans"][0]
     return {
         "mode": "career",
-        "timeline": result_timeline,
-        "semester_summary": summary,
-        "gap": {k: {"required": v, "earned": 0, "missing": v} for k, v in requirements.items() if k != "毕业总学分"},
-        "total_required": requirements.get("毕业总学分"),
+        "timeline": first["timeline"],
+        "semester_summary": first["loads"],
+        "gap": multi["gap"],
+        "total_required": multi["total_required"],
         "total_earned": 0,
         "warnings": [],
-        "note": "课程只在培养方案规定的开课学期可选，不可挪到其他学期。",
+        "note": multi["note"],
     }

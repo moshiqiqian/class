@@ -120,8 +120,8 @@ def _plan_node(state: GraphState) -> dict[str, Any]:
     advice = advisory_notes(profile["major"], profile.get("completed_courses", []))
     mode = state.get("mode", "balanced")
     if mode == "career":
-        from app.core.calc import build_career_plan
-        plan = build_career_plan(profile, curriculum)
+        from app.core.calc import build_career_plans
+        plan = build_career_plans(profile, curriculum)
     else:
         plan = build_plan(profile, curriculum, advice, mode=mode)
     # gap 意图只答缺口，不生成规划建议
@@ -169,27 +169,27 @@ def _generate_plan_suggestion(profile: dict, plan: dict) -> str:
         return ""
     try:
         mode = plan.get("mode", "balanced")
-        total_earned = plan.get("total_earned", 0)
         total_required = plan.get("total_required", 0)
         gap_text = "、".join(f"{k}差{v['missing']}学分" for k, v in plan.get("gap", {}).items() if v.get("missing", 0) > 0)
 
         if mode == "career":
-            # 全生涯规划：说明约束，提示按实际调整
-            from app.core.calc import MAX_CREDITS_PER_SEMESTER, MAX_ELECTIVE_CREDITS_PER_SEMESTER
-            timeline_desc = "；".join(
-                f"第{t}学期 {len(rows)}门/共{sum(c['学分'] for c in rows):.0f}学分"
-                for t, rows in plan.get("timeline", {}).items()
+            # 生涯规划（多方案）：推荐一套 + 说明差异
+            plans = plan.get("plans", [])
+            current = plan.get("current_semester", 1)
+            plan_desc = "；".join(
+                f"{p['name']}（当前第{current}学期建议修 {len(p.get('current_courses', []))} 门）"
+                for p in plans
             )
             prompt = (
-                "你是培养方案选课顾问。以下是一个「全大学生涯（大一到大四）规划」的确定性排课结果。\n"
-                f"已获 {total_earned} / 需修 {total_required} 学分；缺口：{gap_text or '已满足'}。\n"
-                f"排课结果：{timeline_desc}。\n"
-                f"约束：每学期总学分上限 {MAX_CREDITS_PER_SEMESTER:.0f}、选修学分上限 {MAX_ELECTIVE_CREDITS_PER_SEMESTER:.0f}。\n"
-                "请用 3~4 句话：(1) 说明这是按上限约束生成的适应性方案；(2) 提醒学生按自己实际情况（能力、兴趣、开课时间）调整；"
-                "(3) 如果学生能提供具体的每学期学分目标或偏好课程，可以据此优化。语气务实、简洁。"
+                "你是培养方案选课顾问。以下是「全大学生涯（大一到大四）」的几套可选方案。\n"
+                f"毕业需修 {total_required} 学分；各平台缺口：{gap_text or '无'}。\n"
+                f"可选方案：{plan_desc}。\n"
+                "请用 4~5 句话：(1) 推荐一套方案并说明理由；(2) 给出本学期具体该选修哪些课的思路；"
+                "(3) 提醒：必修课固定在开课学期，选修课从实际开设的课程中选，请结合自身能力/兴趣调整。语气务实。"
             )
         else:
             next_courses = "、".join(c["课程名称"] for c in plan.get("next_courses", []))
+            total_earned = plan.get("total_earned", 0)
             prompt = (
                 f"你是培养方案选课顾问。根据以下确定性计算的结果，用 2~4 句话给出实质性的选课建议。\n"
                 f"当前第 {profile['current_semester']} 学期，已获 {total_earned} / 需修 {total_required} 学分。\n"
