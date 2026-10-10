@@ -451,7 +451,10 @@ def _render_review(review: dict) -> None:
 def _render_grades() -> None:
     records = st.session_state.get("transcript_records", [])
     if not records:
-        st.info("暂无成绩单数据。请先在「过往学分」步骤上传成绩单。")
+        st.info("暂无过往成绩单（如大一新生）。本学期待获得学分已按课表计入；如需补充成绩单，可前往成绩单步骤上传。")
+        if st.button("补充/上传过往成绩单", type="primary"):
+            st.session_state.stage = 4
+            st.rerun()
         return
 
     gpa_info = calculate_gpa(records)

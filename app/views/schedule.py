@@ -86,11 +86,6 @@ def render() -> None:
     def _confirm() -> None:
         st.session_state.schedule_confirmed = True
 
-    footer(2, "保存并进入成绩单 →", 4, on_next=_confirm)
-
-    if st.button("跳过（本学期无课表 / 暂不提供）", use_container_width=True):
-        st.session_state.schedule_courses = []
-        st.session_state.schedule_online = []
-        st.session_state.schedule_confirmed = True
-        st.session_state.stage = 4
-        st.rerun()
+    if not schedule and not st.session_state.get("schedule_online"):
+        st.warning("本学期一定有一份课表，请先上传并解析后再继续。")
+    footer(2, "保存并进入成绩单 →", 4, on_next=_confirm, disabled=not schedule)

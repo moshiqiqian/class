@@ -166,7 +166,12 @@ def render() -> None:
             completed_courses.append(name)
     pending_total = sum(pending.values())
 
-    if mode == "手动填写" or records or completed_credits:
+    semester = int(profile.get("current_semester", 1) or 1)
+    is_freshman = semester <= 1
+    if is_freshman:
+        st.info("你当前是**第 1 学期（大一）**，没有过往成绩单，可直接进入智能问答；本学期待获得学分（课表）已计入。日后可在问答页补充成绩单。")
+
+    if mode == "手动填写" or records or completed_credits or is_freshman:
         st.subheader("学分汇总（已获 + 本学期待获得）")
         platforms = list(dict.fromkeys(list(earned_only.keys()) + list(pending.keys())))
         rows = [{"平台": k, "已获": earned_only.get(k, 0.0), "本学期待获得": pending.get(k, 0.0), "合计": completed_credits.get(k, 0.0)} for k in platforms]
@@ -199,25 +204,5 @@ def render() -> None:
 
         footer(3, "进入智能对话 →", 5, on_next=_confirm)
     else:
+        st.info("非大一必须提供过往成绩单（可上传成绩单，或改用手动填写）。")
         footer(3, "进入智能对话 →", 5, disabled=True)
-
-    # 无成绩单（如大一新生）：用课表（本学期待获得学分）作为修读状态进入问答
-    st.divider()
-    if st.button("没有成绩单，直接进入问答（如大一新生）", use_container_width=True):
-        profile.update({
-            "completed_credits": earned_only,
-            "pending_credits": pending,
-            "completed_courses": completed_courses,
-            "failed_courses": [],
-            "missing_semesters": [],
-        })
-        st.session_state.profile = profile
-        st.session_state.transcript_records = []
-        st.session_state.credits_confirmed = True
-        st.session_state.messages = []
-        from app.core.workspace import save_profile
-        if st.session_state.get("current_workspace"):
-            save_profile(st.session_state.current_workspace, profile)
-        reset_after(4)
-        st.session_state.stage = 5
-        st.rerun()

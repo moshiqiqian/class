@@ -55,14 +55,21 @@ def _render_parse_step() -> None:
     college = st.selectbox("学院", colleges, key="sel_college")
     college_units = [u for u in units if u["college"] == college]
 
-    def _label(u: dict) -> str:
+    # 选项：大类本身 + 该大类下已分流的各专业；以及独立专业。
+    # 选「已分流专业」时会解析整个大类（大类信息与分流专业不分隔），再合并。
+    options: list[dict] = []
+    for u in college_units:
         if u["kind"] == "category":
-            subs = [c["name"] for c in u["children"] if not c.get("intro")]
-            return f"{u['name']}（大类 · 大二分流：{'/'.join(subs) if subs else '见方案'}）"
-        return u["name"]
-
-    pick = st.selectbox("专业 / 大类", range(len(college_units)), format_func=lambda i: _label(college_units[i]), key="sel_major")
-    unit = college_units[pick]
+            options.append({"label": f"{u['name']}（大类·暂未分流）", "unit": u, "merge_major": ""})
+            for child in u["children"]:
+                if child.get("intro"):
+                    continue
+                options.append({"label": f"{child['name']}（{u['name']}·已分流）", "unit": u, "merge_major": child["name"]})
+        else:
+            options.append({"label": u["name"], "unit": u, "merge_major": ""})
+    pick = st.selectbox("专业 / 大类", range(len(options)), format_func=lambda i: options[i]["label"], key="sel_major")
+    option = options[pick]
+    unit = option["unit"]
 
     scope = st.radio(
         "解析范围",
@@ -77,7 +84,7 @@ def _render_parse_step() -> None:
             st.session_state.selected_unit = None
             _do_parse(pdf_bytes, None, "", "", key="all")
         else:
-            st.session_state.selected_unit = unit
+            st.session_state.selected_unit = {**unit, "merge_major": option["merge_major"]}
             _do_parse(
                 pdf_bytes,
                 list(range(unit["start_idx"], unit["end_idx"])),
@@ -140,49 +147,40 @@ def _render_profile_step() -> None:
     selected = st.session_state.get("selected_unit")
     college = catalog[0].get("college", "")
     is_category = isinstance(selected, dict) and selected.get("kind") == "category"
+    merge_major = selected.get("merge_major", "") if isinstance(selected, dict) else ""
 
-    # 先取入学时间，据以推算当前学期（决定大类是否已分流）
+    # 入学时间：不给默认值，用占位提示（用户必须显式选择）
     min_year, max_year = enrollment_year_bounds()
+    years = list(range(min_year, max_year + 1))
     saved = st.session_state.profile
     col_year, col_month = st.columns(2)
     with col_year:
-        default_year = saved["enrollment_year"] if saved else min(2023, max_year)
-        year = st.number_input("入学年份", min_value=min_year, max_value=max_year, value=default_year, step=1, key="profile_year")
+        year_index = years.index(saved["enrollment_year"]) if saved and saved.get("enrollment_year") in years else None
+        year = st.selectbox("入学年份", years, index=year_index, placeholder="请选择入学年份", key="profile_year")
     with col_month:
-        default_month = saved["enrollment_month"] if saved else 9
-        month = st.selectbox("入学月份", list(range(1, 13)), index=default_month - 1, key="profile_month")
-    guessed = infer_semester(int(year), int(month))
-    st.caption(f"按入学时间推算：当前为 **第 {guessed} 学期**（可在下一步确认时调整）。")
+        month_index = (saved["enrollment_month"] - 1) if saved and saved.get("enrollment_month") else None
+        month = st.selectbox("入学月份", list(range(1, 13)), index=month_index, placeholder="请选择入学月份（如 9）", key="profile_month")
+
+    guessed = infer_semester(int(year), int(month)) if (year and month) else None
+    if guessed is None:
+        st.caption("请先选择入学年份与月份。")
+    else:
+        st.caption(f"按入学时间推算：当前为 **第 {guessed} 学期**（可在确认时调整）。")
     st.divider()
 
     major = None
     merge = False  # 是否需要把大类共同课程合并进具体专业
-    if is_category:
+    if is_category and not merge_major:
         category_name = selected["name"]
-        subs = [c["name"] for c in selected.get("children", []) if not c.get("intro")]
-        st.info(f"你是**大类**「{category_name}」招生。大类**大一统一培养，之后可能分流**，系统**只规划分流之前**的课程信息。")
-        split_semester = int(st.number_input(
-            "该大类预计分流学期（通常第 3 学期）", min_value=2, max_value=8,
-            value=int(selected.get("split_semester", 3) or 3), step=1, key="cat_split_sem",
-        ))
-        _remember_split_semester(split_semester)
-
-        if guessed >= split_semester:
-            st.warning("你已到大类分流学期，请选择你**已分流**的具体专业（分流前后成绩不分开、绩点一起算）。")
-            major = st.selectbox("分流后的专业", subs or [it["major"] for it in catalog], key="category_major")
-            merge = True
-        elif guessed + 1 >= split_semester:
-            st.warning("你**下学期**将进行专业分流。若要做生涯规划，请先选择**计划分流的专业**；否则只按大类规划。")
-            options = ["（暂不分流，只规划大类）"] + (subs or [it["major"] for it in catalog])
-            choice = st.selectbox("计划分流专业（可选）", options, key="category_major_future")
-            if choice == options[0]:
-                major = category_name
-            else:
-                major = choice
-                merge = True
-        else:
-            major = category_name
-            st.caption(f"当前处于分流前，规划只包含大类「{category_name}」的共同课程。")
+        st.info(f"你是**大类**「{category_name}」招生，大类内**暂未分流**。系统**只规划分流之前**的课程信息。")
+        split_semester = _detect_split_semester(catalog)
+        if split_semester:
+            st.caption(f"培养方案显示：该大类约在 **第 {split_semester} 学期**分流（分流前后成绩不分开、绩点一起算）。")
+        major = category_name
+    elif is_category and merge_major:
+        st.success(f"已按**分流后专业**「{merge_major}」规划；同时并入大类「{selected['name']}」的共同课程（成绩不分隔）。")
+        major = merge_major
+        merge = True
     else:
         majors = [it["major"] for it in catalog]
         if len(majors) == 1:
@@ -197,7 +195,7 @@ def _render_profile_step() -> None:
             college = catalog[pick].get("college", college)
             major = catalog[pick]["major"]
 
-    if st.button("确认信息，推算学期", type="primary", use_container_width=True):
+    if st.button("确认信息，推算学期", type="primary", use_container_width=True, disabled=guessed is None):
         if is_category:
             catalog = _apply_category(catalog, selected["name"], major, merge)
             st.session_state.parsed_catalog = catalog
@@ -210,9 +208,32 @@ def _render_profile_step() -> None:
         st.rerun()
 
 
-def _remember_split_semester(split_semester: int) -> None:
-    """记录分流学期，便于后续按第3学期等触发分流提示。"""
-    st.session_state.split_semester = split_semester
+def _detect_split_semester(catalog: list[dict]) -> int | None:
+    """从培养方案原文自动解析大类分流学期。
+
+    支持三类写法：
+      1)「第X学期…分流/选择专业/确定专业」
+      2)「专业类共同修读课程设置表（1-3学期）」→ 取末学期
+      3)「专业类共同课学习年限：1.5年」→ 年限×2
+    """
+    import re
+
+    text = re.sub(r"\s+", "", "".join(it.get("raw_text", "") for it in catalog))
+    cn = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8}
+
+    for match in re.finditer(r"第([一二三四五六七八九十\d]+)学期", text):
+        segment = text[match.start():match.start() + 50]
+        if any(word in segment for word in ("分流", "划分专业", "选择专业", "确定专业", "分专业")):
+            token = match.group(1)
+            return int(token) if token.isdigit() else cn.get(token)
+
+    if m := re.search(r"共同修读课程设置表[（(]([0-9]+)\s*[-~至]\s*([0-9]+)\s*学期", text):
+        return int(m.group(2))
+
+    if m := re.search(r"共同课学习年限[:：]([0-9.]+)年", text):
+        return max(1, round(float(m.group(1)) * 2))
+
+    return None
 
 
 def _apply_category(catalog: list[dict], category_name: str, major_name: str, merge: bool) -> list[dict]:
