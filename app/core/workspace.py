@@ -132,6 +132,9 @@ def load_into_session(name: str) -> bool:
     st.session_state.profile = None
     st.session_state.credits_confirmed = False
     st.session_state.transcript_records = []
+    st.session_state.schedule_courses = []
+    st.session_state.schedule_online = []
+    st.session_state.schedule_confirmed = False
     st.session_state.manual_credits = {}
     st.session_state.index_ready = False
 

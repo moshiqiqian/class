@@ -19,8 +19,6 @@ def render() -> None:
 
     if not st.session_state.get("parsed"):
         _render_parse_step()
-        if st.session_state.get("freshman_confirm"):
-            _freshman_dialog()
         return
 
     _render_profile_step()
@@ -32,9 +30,6 @@ def render() -> None:
             int(st.session_state.get("_confirm_year", 2023)),
             int(st.session_state.get("_confirm_month", 9)),
         )
-
-    if st.session_state.get("freshman_confirm"):
-        _freshman_dialog()
 
 
 # --------------------------- 第一阶段：选专业并解析 ---------------------------
@@ -144,14 +139,50 @@ def _render_profile_step() -> None:
 
     selected = st.session_state.get("selected_unit")
     college = catalog[0].get("college", "")
+    is_category = isinstance(selected, dict) and selected.get("kind") == "category"
+
+    # 先取入学时间，据以推算当前学期（决定大类是否已分流）
+    min_year, max_year = enrollment_year_bounds()
+    saved = st.session_state.profile
+    col_year, col_month = st.columns(2)
+    with col_year:
+        default_year = saved["enrollment_year"] if saved else min(2023, max_year)
+        year = st.number_input("入学年份", min_value=min_year, max_value=max_year, value=default_year, step=1, key="profile_year")
+    with col_month:
+        default_month = saved["enrollment_month"] if saved else 9
+        month = st.selectbox("入学月份", list(range(1, 13)), index=default_month - 1, key="profile_month")
+    guessed = infer_semester(int(year), int(month))
+    st.caption(f"按入学时间推算：当前为 **第 {guessed} 学期**（可在下一步确认时调整）。")
+    st.divider()
 
     major = None
-    if isinstance(selected, dict) and selected.get("kind") == "category":
-        st.info(f"你选择的是**大类**「{selected['name']}」。该大类大一统一培养，大二再分流到具体专业。")
-        st.warning("生涯规划需要落到一个具体专业。请先选定**未来分流的专业**；规划时会把「大类共同课程 + 该专业课程」合并考虑。")
+    merge = False  # 是否需要把大类共同课程合并进具体专业
+    if is_category:
+        category_name = selected["name"]
         subs = [c["name"] for c in selected.get("children", []) if not c.get("intro")]
-        options = subs or [it["major"] for it in catalog]
-        major = st.selectbox("未来分流专业", options, key="category_major")
+        st.info(f"你是**大类**「{category_name}」招生。大类**大一统一培养，之后可能分流**，系统**只规划分流之前**的课程信息。")
+        split_semester = int(st.number_input(
+            "该大类预计分流学期（通常第 3 学期）", min_value=2, max_value=8,
+            value=int(selected.get("split_semester", 3) or 3), step=1, key="cat_split_sem",
+        ))
+        _remember_split_semester(split_semester)
+
+        if guessed >= split_semester:
+            st.warning("你已到大类分流学期，请选择你**已分流**的具体专业（分流前后成绩不分开、绩点一起算）。")
+            major = st.selectbox("分流后的专业", subs or [it["major"] for it in catalog], key="category_major")
+            merge = True
+        elif guessed + 1 >= split_semester:
+            st.warning("你**下学期**将进行专业分流。若要做生涯规划，请先选择**计划分流的专业**；否则只按大类规划。")
+            options = ["（暂不分流，只规划大类）"] + (subs or [it["major"] for it in catalog])
+            choice = st.selectbox("计划分流专业（可选）", options, key="category_major_future")
+            if choice == options[0]:
+                major = category_name
+            else:
+                major = choice
+                merge = True
+        else:
+            major = category_name
+            st.caption(f"当前处于分流前，规划只包含大类「{category_name}」的共同课程。")
     else:
         majors = [it["major"] for it in catalog]
         if len(majors) == 1:
@@ -165,21 +196,10 @@ def _render_profile_step() -> None:
             )
             college = catalog[pick].get("college", college)
             major = catalog[pick]["major"]
-    st.divider()
-
-    min_year, max_year = enrollment_year_bounds()
-    saved = st.session_state.profile
-    col_year, col_month = st.columns(2)
-    with col_year:
-        default_year = saved["enrollment_year"] if saved else min(2023, max_year)
-        year = st.number_input("入学年份", min_value=min_year, max_value=max_year, value=default_year, step=1, key="profile_year")
-    with col_month:
-        default_month = saved["enrollment_month"] if saved else 9
-        month = st.selectbox("入学月份", list(range(1, 13)), index=default_month - 1, key="profile_month")
 
     if st.button("确认信息，推算学期", type="primary", use_container_width=True):
-        if isinstance(selected, dict) and selected.get("kind") == "category":
-            catalog = _merge_category(catalog, selected["name"], major)
+        if is_category:
+            catalog = _apply_category(catalog, selected["name"], major, merge)
             st.session_state.parsed_catalog = catalog
             _persist_catalog(catalog)
         st.session_state["_confirm_college"] = college
@@ -188,6 +208,24 @@ def _render_profile_step() -> None:
         st.session_state["_confirm_month"] = int(month)
         st.session_state.dialog_open = True
         st.rerun()
+
+
+def _remember_split_semester(split_semester: int) -> None:
+    """记录分流学期，便于后续按第3学期等触发分流提示。"""
+    st.session_state.split_semester = split_semester
+
+
+def _apply_category(catalog: list[dict], category_name: str, major_name: str, merge: bool) -> list[dict]:
+    """大类处理：需合并则「大类共同课程 + 分流专业」，否则只保留大类共同课程。"""
+    if merge:
+        merged = _merge_category(catalog, category_name, major_name)
+        if merged:
+            merged[0]["category"] = category_name
+        return merged
+    item = next((it for it in catalog if it["major"] == category_name), catalog[0])
+    item = dict(item)
+    item["category"] = category_name
+    return [item]
 
 
 def _merge_category(catalog: list[dict], category_name: str, major_name: str) -> list[dict]:
@@ -255,31 +293,9 @@ def _confirm_dialog(college: str, major: str, year: int, month: int) -> None:
 
 
 def _next_stage(current_semester: int) -> None:
-    """确定后续流程：第 1 学期（大一新生，无成绩单）→ 二次确认后直接进问答；否则进过往学分。"""
-    if current_semester <= 1:
-        st.session_state.freshman_confirm = True
-    else:
-        st.session_state.stage = 3
+    """学生信息确认后 → 进入本学期课表步骤。"""
+    st.session_state.stage = 3
     st.rerun()
-
-
-@st.dialog("大一新生确认")
-def _freshman_dialog() -> None:
-    st.markdown("你是**第 1 学期**（大一新生），**暂无期末成绩单**。")
-    st.markdown("- 过往学分视为 **0**（没有任何已修课程）\n- 可直接进入**智能问答与选课规划**")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("✓ 直接进入问答规划", type="primary", use_container_width=True):
-            st.session_state.freshman_confirm = False
-            st.session_state.credits_confirmed = True
-            st.session_state.transcript_records = []
-            st.session_state.stage = 4
-            st.rerun()
-    with col2:
-        if st.button("改为录入学分", use_container_width=True):
-            st.session_state.freshman_confirm = False
-            st.session_state.stage = 3
-            st.rerun()
 
 
 def _save_profile(college: str, major: str, year: int, month: int, current_semester: int) -> None:

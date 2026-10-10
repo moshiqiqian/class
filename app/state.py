@@ -15,7 +15,11 @@ DEFAULTS: dict[str, object] = {
     "pending_workspace": "",              # 待绑定的工作区（解析正文后绑定）
     "profile": None,                      # 学生画像
     "credits_confirmed": False,           # 是否已确认学分
-    # —— 阶段 C 的中间状态，切页不丢 ——
+    # —— 本学期课表（阶段 C，成绩单之前）——
+    "schedule_courses": [],               # 本学期课表解析出的课程 [{name, credits}]
+    "schedule_online": [],                # 本学期不在课表中的通识网课（手动补选）
+    "schedule_confirmed": False,          # 是否已确认本学期课表
+    # —— 成绩单（阶段 D）——
     "transcript_records": [],             # 解析出的成绩单记录
     "transcript_statuses": {},            # 不及格课程状态
     "credit_mode": "手动填写",            # 录入方式
@@ -51,9 +55,11 @@ def unlock(stage: int) -> bool:
         return True
     if stage == 2:
         return st.session_state.parsed or st.session_state.toc_scanned
-    if stage == 3:
+    if stage == 3:  # 本学期课表
         return st.session_state.profile is not None
-    if stage == 4:
+    if stage == 4:  # 过往成绩单
+        return st.session_state.profile is not None
+    if stage == 5:  # 智能问答
         return st.session_state.credits_confirmed
     return False
 
@@ -67,10 +73,21 @@ def reset_after(stage: int) -> None:
         st.session_state.transcript_statuses = {}
         st.session_state.messages = []
         st.session_state.index_ready = False
+        st.session_state.schedule_courses = []
+        st.session_state.schedule_online = []
+        st.session_state.schedule_confirmed = False
     if stage <= 2:
         st.session_state.credits_confirmed = False
         st.session_state.transcript_records = []
         st.session_state.transcript_statuses = {}
         st.session_state.messages = []
+        st.session_state.schedule_courses = []
+        st.session_state.schedule_online = []
+        st.session_state.schedule_confirmed = False
     if stage <= 3:
+        st.session_state.credits_confirmed = False
+        st.session_state.transcript_records = []
+        st.session_state.transcript_statuses = {}
+        st.session_state.messages = []
+    if stage <= 4:
         st.session_state.messages = []

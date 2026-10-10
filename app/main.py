@@ -3,7 +3,7 @@ from __future__ import annotations
 import streamlit as st
 
 from app.state import initialize
-from app.views import chat, credits, manage, profile, promote, upload
+from app.views import chat, credits, manage, profile, promote, schedule, upload
 
 
 def main() -> None:
@@ -20,26 +20,27 @@ def main() -> None:
         promote.render()
         return
 
-    # 阶段 4 是独立的对话页面，不显示向导导航
-    if st.session_state.stage == 4:
+    # 阶段 5 是独立的对话页面，不显示向导导航
+    if st.session_state.stage == 5:
         chat.render()
         return
 
     st.title("培养方案智能问答与选课规划")
-    st.caption("先完成信息采集（三步），进入独立的智能对话页面。")
+    st.caption("先完成信息采集（四步），进入独立的智能对话页面。")
     _setup_wizard()
 
 
 def _setup_wizard() -> None:
     from app.state import unlock
 
-    steps = ((1, "上传并扫描方案"), (2, "选择专业·学生信息"), (3, "过往学分"))
+    steps = ((1, "上传并扫描方案"), (2, "选择专业·学生信息"), (3, "本学期课表"), (4, "过往成绩单"))
     columns = st.columns(len(steps))
     current = st.session_state.stage
     done_flags = {
-        1: st.session_state.parsed,
+        1: st.session_state.parsed or st.session_state.toc_scanned,
         2: st.session_state.profile is not None,
-        3: st.session_state.credits_confirmed,
+        3: st.session_state.schedule_confirmed,
+        4: st.session_state.credits_confirmed,
     }
     for column, (number, title) in zip(columns, steps):
         done = done_flags[number]
@@ -55,6 +56,8 @@ def _setup_wizard() -> None:
     elif stage == 2:
         profile.render()
     elif stage == 3:
+        schedule.render()
+    elif stage == 4:
         credits.render()
 
 

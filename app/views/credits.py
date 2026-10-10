@@ -108,8 +108,15 @@ def _render_upload(profile: dict) -> tuple[list[dict], dict[str, float], list[st
     return records, completed_credits, completed_courses, failed, missing
 
 
+def _schedule_names() -> list[str]:
+    """本学期课表 + 补录网课的课程名，用于避免重复推荐。"""
+    names = [c["name"] for c in st.session_state.get("schedule_courses", [])]
+    names += st.session_state.get("schedule_online", [])
+    return names
+
+
 def render() -> None:
-    st.header("步骤 C · 过往学分录入")
+    st.header("步骤 D · 过往成绩单")
     profile = st.session_state.profile
     if not profile:
         st.warning("学生信息缺失，请先完成步骤 B。")
@@ -150,9 +157,13 @@ def render() -> None:
         st.caption(f"已获学分总计：**{total}** 学分")
 
         def _confirm() -> None:
+            names = list(completed_courses)
+            for name in _schedule_names():
+                if name not in names:
+                    names.append(name)
             profile.update({
                 "completed_credits": completed_credits,
-                "completed_courses": completed_courses,
+                "completed_courses": names,
                 "failed_courses": failed,
                 "missing_semesters": missing,
             })
@@ -165,8 +176,28 @@ def render() -> None:
             if st.session_state.get("current_workspace"):
                 save_profile(st.session_state.current_workspace, profile)
                 save_transcripts(st.session_state.current_workspace, st.session_state.transcript_records)
-            reset_after(3)
+            reset_after(4)
 
-        footer(2, "进入智能对话 →", 4, on_next=_confirm)
+        footer(3, "进入智能对话 →", 5, on_next=_confirm)
     else:
-        footer(2, "进入智能对话 →", 4, disabled=True)
+        footer(3, "进入智能对话 →", 5, disabled=True)
+
+    # 无成绩单（如大一新生）：直接用课表作为修读状态进入问答
+    st.divider()
+    if st.button("没有成绩单，直接进入问答（如大一新生）", use_container_width=True):
+        profile.update({
+            "completed_credits": {},
+            "completed_courses": _schedule_names(),
+            "failed_courses": [],
+            "missing_semesters": [],
+        })
+        st.session_state.profile = profile
+        st.session_state.transcript_records = []
+        st.session_state.credits_confirmed = True
+        st.session_state.messages = []
+        from app.core.workspace import save_profile
+        if st.session_state.get("current_workspace"):
+            save_profile(st.session_state.current_workspace, profile)
+        reset_after(4)
+        st.session_state.stage = 5
+        st.rerun()
