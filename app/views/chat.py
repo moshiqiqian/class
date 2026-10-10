@@ -298,7 +298,7 @@ def _render_plan(plan: dict, intent: str) -> None:
 
 
 def _render_career_plan(plan: dict) -> None:
-    """全大学生涯规划：默认给一套方案 + 当前学期选课 + 逐学期模板 + 可定制提示。"""
+    """全大学生涯规划：选修清单（标注必选/可选）+ 学校安排（必修）分开 + 叙述建议。"""
     st.markdown("### 📋 大学四年整体规划")
 
     plans = plan.get("plans")
@@ -308,58 +308,65 @@ def _render_career_plan(plan: dict) -> None:
 
     current = plan.get("current_semester", 1)
     total_required = plan.get("total_required")
-    p = plans[0]  # 默认只展示第一套
+    p = plans[0]
 
+    # 叙述性总览
     st.markdown(
+        f"根据你的培养方案和已获学分，我从**大一到大四**为你做了整体规划。\n\n"
         f"- **当前学期**：第 {current} 学期\n"
-        f"- **毕业需修**：{total_required if total_required else '—'} 学分\n"
-        f"- **说明**：**必修课由学校统一安排**，无需系统为你选课；你只需**自选通识选修课和专业选修课**，系统按平台**缺口**给出建议；课程按**开课学期**安排。"
+        f"- **毕业需修**：{total_required if total_required else '—'} 学分\n\n"
+        f"**核心原则**：大部分**必修课由学校统一安排**，你无需操心；真正需要你**主动选**的是"
+        f"**通识选修课**和**专业选修课**。下面我把「**选课清单**（你要选的选修课）」和「学校安排（必修课）」"
+        f"分开列出，方便你聚焦真正要选的课。"
     )
-    st.caption("⚠️ 注意：部分**通识必修课**（如体育、思政、四史模块等）可能需要你在教务系统**手动选课**，请以学校通知为准，此处未列入选修建议。")
+    st.caption("⚠️ 部分通识必修课（如体育、思政、四史模块等）可能需你在教务系统手动选课，请以学校通知为准。")
     st.divider()
 
-    # 当前学期具体选课（重点）
-    cur_courses = p.get("current_courses", [])
-    if cur_courses:
-        cur_credits = sum(c["学分"] for c in cur_courses)
-        st.success(f"**本学期（第 {current} 学期）建议选课 {len(cur_courses)} 门、共 {cur_credits:.1f} 学分：**")
-        st.dataframe(pd.DataFrame(cur_courses), use_container_width=True)
-    else:
-        st.info(f"第 {current} 学期无需你自行选课（或已修完该学期课程）。")
-
-    # 各学期负担（覆盖 1-8 学期）
-    loads = p.get("loads", {})
-    if loads:
-        st.markdown("**各学期负担**")
-        load_df = pd.DataFrame([
-            {"学期": f"第{t}学期（大{['一','二','三','四'][(t-1)//2]}{'上' if t%2==1 else '下'}）",
-             "需自选学分": v.get("需自选", 0), "学校安排学分": v.get("学校安排", 0), "合计": v.get("合计", 0)}
-            for t, v in sorted(loads.items())
-        ])
-        st.dataframe(load_df, use_container_width=True)
-
-    # 选修课缺口与建议
+    # 选修缺口（叙述）
     eg = p.get("elective_gap", {})
+    st.markdown("#### 🎯 你的选修课缺口")
     if eg:
-        st.markdown("**选修课还需修读**：" + "、".join(f"{k} {v} 学分" for k, v in eg.items()))
-        st.caption("建议把选修分散到剩余学期，每学期 1~2 门，避免集中在大四。")
+        for k, v in eg.items():
+            st.markdown(f"- **{k}**：还需修读 **{v} 学分**")
+        st.caption("建议把选修分散到接下来的学期，每学期 1~2 门，避免全部堆到大四影响实习/考研。")
+    else:
+        st.success("你的选修学分已满足要求，无需再选选修课。")
 
-    # 逐学期模板（始终展示 1-8 学期）
-    st.markdown("**逐学期选课模板**")
+    # 本学期具体建议（叙述）
+    if 1 <= current <= 8:
+        cur = p.get("current_courses", [])
+        st.markdown(f"#### 📌 本学期（第 {current} 学期）建议")
+        if cur:
+            cur_credits = sum(c["学分"] for c in cur)
+            must = [c for c in cur if c.get("选课要求") == "必选"]
+            opt = [c for c in cur if c.get("选课要求") != "必选"]
+            line = f"本学期建议选 **{len(cur)} 门选修课**（共 {cur_credits:.1f} 学分）。"
+            if must:
+                line += f" 其中**必选** {len(must)} 门：" + "、".join(c["课程名称"] for c in must) + "。"
+            if opt:
+                line += f" **可选**（按需选）：" + "、".join(c["课程名称"] for c in opt) + "。"
+            st.info(line)
+        else:
+            st.info(f"第 {current} 学期培养方案未安排选修课，本学期专注必修课即可。")
+    st.divider()
+
+    # 逐学期选课清单（仅选修课）+ 学校安排（必修）分开折叠
+    st.markdown("#### 📝 逐学期选课清单")
     for term in range(1, 9):
         rows = p["timeline"].get(term, [])
         school = p.get("school", {}).get(term, [])
         year, half = (term + 1) // 2, "上" if term % 2 == 1 else "下"
-        total = sum(c["学分"] for c in rows)
-        st.markdown(f"**第 {term} 学期（大{['一','二','三','四'][year-1]}{half}）** · 需自选 {len(rows)} 门 / {total:.1f} 学分")
+        label = f"第 {term} 学期（大{['一','二','三','四'][year-1]}{half}）"
         if rows:
-            st.markdown("　需自选（选修）：" + "、".join(f"{c['课程名称']}({c['学分']})" for c in rows))
+            total = sum(c["学分"] for c in rows)
+            st.markdown(f"**{label}** · 建议选 {len(rows)} 门选修 / {total:.1f} 学分")
+            data = [{"课程名称": c["课程名称"], "类别": c["类别"], "学分": c["学分"], "选课要求": c.get("选课要求", "可选")} for c in rows]
+            st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
         else:
-            st.markdown("　需自选（选修）：无")
+            st.markdown(f"**{label}** · 无选修课需自选")
         if school:
-            st.markdown("　学校安排：" + "、".join(f"{c['课程名称']}({c['学分']})" for c in school))
-        else:
-            st.markdown("　学校安排：无")
+            with st.expander(f"　该校学期「学校安排」的必修课（{len(school)} 门，无需自选）"):
+                st.dataframe(pd.DataFrame([{"课程名称": c["课程名称"], "类别": c["类别"], "学分": c["学分"]} for c in school]), use_container_width=True, hide_index=True)
 
     # 导出 Excel
     try:
@@ -375,7 +382,7 @@ def _render_career_plan(plan: dict) -> None:
 
 
 def _plan_to_excel(p: dict) -> bytes:
-    """把选课方案导出为排版清晰的 Excel（按学期分块，含需选/学校安排）。"""
+    """把选课方案导出为 Excel（按学期分块：选课清单=选修，学校安排=必修）。"""
     import io
     rows = []
     for term in range(1, 9):
@@ -386,18 +393,17 @@ def _plan_to_excel(p: dict) -> bytes:
         year, half = (term + 1) // 2, "上" if term % 2 == 1 else "下"
         label = f"第{term}学期（大{['一','二','三','四'][year-1]}{half}）"
         for c in timeline:
-            rows.append({"学期": label, "类型": "需自选", "课程名称": c.get("课程名称", ""),
-                         "类别": c.get("类别", ""), "学分": c.get("学分", "")})
+            rows.append({"学期": label, "类型": "选课清单（需自选）", "课程名称": c.get("课程名称", ""),
+                         "类别": c.get("类别", ""), "学分": c.get("学分", ""), "选课要求": c.get("选课要求", "可选")})
         for c in school:
-            rows.append({"学期": label, "类型": "学校安排", "课程名称": c.get("课程名称", ""),
-                         "类别": c.get("类别", ""), "学分": c.get("学分", "")})
+            rows.append({"学期": label, "类型": "学校安排（必修）", "课程名称": c.get("课程名称", ""),
+                         "类别": c.get("类别", ""), "学分": c.get("学分", ""), "选课要求": "—"})
     df = pd.DataFrame(rows)
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="选课规划")
         ws = writer.sheets["选课规划"]
-        # 列宽
-        for col, width in zip("ABCDE", (18, 10, 28, 14, 8)):
+        for col, width in zip("ABCDEF", (18, 18, 30, 14, 8, 10)):
             ws.column_dimensions[col].width = width
     return buf.getvalue()
 

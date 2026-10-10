@@ -280,12 +280,16 @@ def _schedule(courses: list[dict], current_semester: int, mode: str) -> dict[int
 
 
 def _course_row(course: dict) -> dict:
+    note = str(course.get("note") or "").strip()
+    # 选修的必选/可选标注：备注含「必选」→ 必选，否则可选
+    select_tag = "必选" if "必选" in note else "可选"
     return {
         "课程名称": course["name"],
         "类别": course.get("category", course.get("platform", "")),
         "学分": float(course["credits"]),
         "原始学期": f"第 {course.get('semester', 0)} 学期",
         "性质": "必修" if course.get("required", True) else "选修",
+        "选课要求": select_tag if not course.get("required", True) else "",
     }
 
 
