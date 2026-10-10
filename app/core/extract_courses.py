@@ -186,22 +186,35 @@ def _fill_merged(rows: list[dict]) -> None:
         i = j
 
 
-# 只有疑似含课程表/学分表的页面才做昂贵的表格抽取（page.extract_tables 很慢）
-_TABLE_HINT = ("课程名称", "开课学期", "修读学期", "课程性质", "课程平台", "课程类别", "毕业最低")
-
-
 def parse_pdf(pdf_bytes: bytes, filename: str, progress=None) -> list[dict]:
-    """Extract a best-effort catalog, keeping all results local and cacheable.
+    """解析整份 PDF（等价于 parse_pdf_pages 不限定页范围）。"""
+    return parse_pdf_pages(pdf_bytes, filename, None, progress=progress)
 
-    progress(done, total) 可选回调，用于前端展示进度、避免用户误以为卡死。
+
+def parse_pdf_pages(
+    pdf_bytes: bytes,
+    filename: str,
+    page_indices: list[int] | None = None,
+    seed_college: str = "",
+    seed_major: str = "",
+    progress=None,
+) -> list[dict]:
+    """解析 PDF，可按 page_indices（0 基物理页序号）只解析部分页。
+
+    准确性优先：对选中的每一页都做完整文本提取 + 逐表扫描。
+    seed_college/seed_major 作为初始上下文，便于把「专业类简介」等页归入所选大类。
     """
     grouped: OrderedDict[tuple[str, str], dict] = OrderedDict()
     last_categories: dict[tuple[str, str], str] = {}
-    college = major = ""
+    college, major = seed_college, seed_major
     full_pages: list[str] = []
     with pdfplumber.open(BytesIO(pdf_bytes)) as document:
-        total = len(document.pages)
-        for index, page in enumerate(document.pages, start=1):
+        pages = document.pages
+        total = len(pages)
+        selected = list(range(total)) if page_indices is None else [i for i in page_indices if 0 <= i < total]
+        count_total = len(selected)
+        for done, i in enumerate(selected, start=1):
+            page = pages[i]
             text = page.extract_text() or ""
             if text.strip():
                 full_pages.append(text.strip())
@@ -212,23 +225,23 @@ def parse_pdf(pdf_bytes: bytes, filename: str, progress=None) -> list[dict]:
                 # 累积该专业的完整原文（培养目标、要求、学分、课程表等），供问答使用
                 if text.strip():
                     item["raw_text"].append(text.strip())
-                # 仅对疑似表格页抽取表格（绝大多数叙述页跳过，显著提速）
-                if any(hint in text for hint in _TABLE_HINT):
-                    for table in page.extract_tables():
-                        requirements = _requirements_from_table(table)
-                        if requirements:
-                            item["credit_requirements"].update(requirements)
-                        courses, last_category = _courses_from_table(table, college, major, last_categories.get(key, "未分类"))
-                        if courses:
-                            item["courses"].extend(courses)
-                            last_categories[key] = last_category
+                # 逐页完整扫描表格，确保不遗漏任何表（准确性优先，慢一点没关系）
+                for table in page.extract_tables():
+                    requirements = _requirements_from_table(table)
+                    if requirements:
+                        item["credit_requirements"].update(requirements)
+                    courses, last_category = _courses_from_table(table, college, major, last_categories.get(key, "未分类"))
+                    if courses:
+                        item["courses"].extend(courses)
+                        last_categories[key] = last_category
             if progress:
-                progress(index, total)
-    # 写全文旁车缓存：供 RAG 建索引复用，避免再次读取整个 PDF（省一遍全页解析）
-    try:
-        fulltext_path(pdf_bytes).write_text("\n".join(full_pages), encoding="utf-8")
-    except OSError:
-        pass
+                progress(done, count_total)
+    # 全文旁车缓存（仅整份解析时写，供 RAG 建索引复用）
+    if page_indices is None:
+        try:
+            fulltext_path(pdf_bytes).write_text("\n".join(full_pages), encoding="utf-8")
+        except OSError:
+            pass
     for item in grouped.values():
         unique = {(course["name"], course["semester"], course["credits"]): course for course in item["courses"]}
         item["courses"] = list(unique.values())
@@ -236,9 +249,146 @@ def parse_pdf(pdf_bytes: bytes, filename: str, progress=None) -> list[dict]:
     return [item for item in grouped.values() if item["courses"]]
 
 
+# ---------- 目录扫描（第一阶段：快速定位学院/专业/页码，不解析正文） ----------
+
+_TOC_LEADER_RE = re.compile(r"^(?P<title>.+?)\s*[·•.．…]{2,}\s*(?P<page>\d+)\s*$")
+_PART_PREFIX_RE = re.compile(r"^第[一二三四五六七八九十]+部分\s*")
+
+
+def _compact(text: str) -> str:
+    return re.sub(r"\s+", "", text or "")
+
+
+def _classify_toc_title(title: str) -> str:
+    t = _compact(title)
+    if _PART_PREFIX_RE.match(t):
+        return "part"
+    if "专业" not in t and re.search(r"(学院|学部|系)$", t):
+        return "college"
+    if "类专业" in t and "培养方案" in t:
+        return "category"
+    if "专业" in t and "培养方案" in t:
+        return "major"
+    return "other"
+
+
+def _major_core(title: str) -> str:
+    t = re.sub(r"\s+", "", title or "")
+    t = _PART_PREFIX_RE.sub("", t)
+    t = t.replace("本科", "")
+    t = re.sub(r"(人才培养方案|培养方案)$", "", t)
+    return t
+
+
+def scan_toc(pdf_bytes: bytes, filename: str, max_toc_pages: int = 15) -> dict:
+    """仅扫描目录页，返回学院/专业树，不做正文解析（第一阶段）。
+
+    返回：
+      {has_toc, total_pages, offset, units: [{college, name, kind, start_idx, end_idx,
+       children:[{name, kind, start_idx, end_idx}]}], toc_pages}
+    其中 start_idx/end_idx 为 0 基物理页序号（含头不含尾）。
+    """
+    with pdfplumber.open(BytesIO(pdf_bytes)) as document:
+        pages = document.pages
+        total = len(pages)
+        # 只提取前若干页文本（目录通常在最前面），避免全量提取
+        probe_n = min(max(30, max_toc_pages + 20), total)
+        texts = [pages[i].extract_text() or "" for i in range(probe_n)]
+
+    toc_start = None
+    for i in range(min(20, probe_n)):
+        if re.search(r"目\s*录", texts[i]):
+            toc_start = i
+            break
+    empty = {"has_toc": False, "total_pages": total, "offset": 0, "units": [], "toc_pages": []}
+    if toc_start is None:
+        return empty
+
+    entries: list[tuple[str, int, str]] = []
+    toc_pages: list[int] = []
+    for i in range(toc_start, min(toc_start + max_toc_pages, probe_n)):
+        page_entries = []
+        for line in texts[i].splitlines():
+            m = _TOC_LEADER_RE.match(line.strip())
+            if not m:
+                continue
+            title = m.group("title").strip()
+            if not title:
+                continue
+            page_entries.append((title, int(m.group("page")), _classify_toc_title(title)))
+        if not page_entries:
+            break
+        toc_pages.append(i)
+        entries.extend(page_entries)
+    if not entries:
+        return empty
+
+    units: list[dict] = []
+    current_college = ""
+    current_unit: dict | None = None
+    for title, pg, kind in entries:
+        if kind == "college":
+            current_college = _compact(title)
+            current_unit = None
+        elif kind in ("major", "category"):
+            current_unit = {"college": current_college, "name": _major_core(title), "kind": kind, "start_doc": pg, "children": [], "raw": _compact(title)}
+            units.append(current_unit)
+        elif kind == "part":
+            if current_unit is not None:
+                current_unit["children"].append({"name": _major_core(title), "start_doc": pg, "intro": "简介" in title, "raw": _compact(title)})
+    if not units:
+        return empty
+
+    # 计算「文档页码 → 物理页序号」偏移
+    content_start = toc_pages[-1] + 1
+    while content_start < probe_n and not texts[content_start].strip():
+        content_start += 1
+    offset = content_start - (units[0]["start_doc"] - 1)
+
+    for idx, u in enumerate(units):
+        next_start = units[idx + 1]["start_doc"] if idx + 1 < len(units) else None
+        u["start_idx"] = u["start_doc"] - 1 + offset
+        u["end_idx"] = (next_start - 1 + offset) if next_start is not None else total
+        for ci, child in enumerate(u["children"]):
+            next_child = u["children"][ci + 1]["start_doc"] if ci + 1 < len(u["children"]) else None
+            child["start_idx"] = child["start_doc"] - 1 + offset
+            child["end_idx"] = (next_child - 1 + offset) if next_child is not None else u["end_idx"]
+
+    return {"has_toc": True, "total_pages": total, "offset": offset, "units": units, "toc_pages": toc_pages}
+
+
 def cache_path(pdf_bytes: bytes) -> Path:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     return CACHE_DIR / f"catalog-{hashlib.sha256(pdf_bytes).hexdigest()[:16]}.json"
+
+
+def selection_cache_path(pdf_bytes: bytes, key: str) -> Path:
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    base = hashlib.sha256(pdf_bytes).hexdigest()[:16]
+    return CACHE_DIR / f"catalog-{base}-{key}.json"
+
+
+def selection_key(page_indices: list[int] | None, seed_major: str) -> str:
+    raw = "all" if page_indices is None else f"{seed_major}|{page_indices[0]}-{page_indices[-1]}"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
+
+
+def parse_selection(
+    pdf_bytes: bytes,
+    filename: str,
+    page_indices: list[int] | None = None,
+    seed_college: str = "",
+    seed_major: str = "",
+    key: str = "all",
+    progress=None,
+) -> tuple[list[dict], str]:
+    """解析所选范围并写缓存，返回 (catalog, cache 文件名)。"""
+    catalog = parse_pdf_pages(pdf_bytes, filename, page_indices, seed_college=seed_college, seed_major=seed_major, progress=progress)
+    if not catalog:
+        raise ValueError("未识别到可用课程表。请确认 PDF 含有文字层和课程设置表。")
+    path = selection_cache_path(pdf_bytes, key)
+    path.write_text(json.dumps(catalog, ensure_ascii=False, indent=2), encoding="utf-8")
+    return catalog, path.name
 
 
 def fulltext_path(pdf_bytes: bytes) -> Path:

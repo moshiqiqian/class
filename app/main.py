@@ -33,7 +33,7 @@ def main() -> None:
 def _setup_wizard() -> None:
     from app.state import unlock
 
-    steps = ((1, "培养方案解析"), (2, "学生信息"), (3, "过往学分"))
+    steps = ((1, "上传并扫描方案"), (2, "选择专业·学生信息"), (3, "过往学分"))
     columns = st.columns(len(steps))
     current = st.session_state.stage
     done_flags = {

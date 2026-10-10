@@ -77,24 +77,60 @@ def _save_parents(parents: dict[str, dict]) -> None:
     PARENTS_FILE.write_text(json.dumps(parents, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def index_documents(pdf_bytes: bytes, filename: str, full_text: str = "", embeddings=None) -> int:
-    """建立「父文档检索」索引：
-    - 按章节切父块，父块存 parents.json
-    - 父块切碎片，碎片向量化入 Chroma（碎片 metadata 记录 parent_id）
+def index_text(text: str, source: str, embeddings=None, progress=None, force: bool = False) -> int:
+    """对给定文本建立「父文档检索」索引（父块=章节，碎片向量化入 Chroma）。
 
-    full_text 可传入已提取的全文（复用解析阶段的旁车缓存），避免重复读取 PDF。
+    - 只索引传入的文本（即所选专业/大类的原文），命中一次到位。
+    - force=True 时忽略相同内容标记，强制重建。
     """
+    from langchain_community.vectorstores import Chroma
+
+    digest = hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+    marker = INDEX_DIR / "source.sha256"
+    if not force and marker.exists() and marker.read_text() == digest:
+        return 0
+
+    # 1. 按章节切父块
+    chapters = _split_chapters(text or "")
+    parents: dict[str, dict] = {}
+    all_chunks: list[Document] = []
+    splitter = RecursiveCharacterTextSplitter(chunk_size=300, chunk_overlap=50)
+    for parent_id, chapter in enumerate(chapters):
+        parents[str(parent_id)] = {"title": chapter["title"], "content": chapter["content"]}
+        for sub in splitter.split_documents([Document(page_content=chapter["content"], metadata={})]):
+            all_chunks.append(Document(
+                page_content=sub.page_content,
+                metadata={"parent_id": str(parent_id), "title": chapter["title"], "source": source},
+            ))
+
+    # 2. 分批向量化入向量库（可上报进度）
+    INDEX_DIR.mkdir(parents=True, exist_ok=True)
+    emb = embeddings or _embeddings()
+    total = len(all_chunks)
+    try:
+        Chroma(persist_directory=str(INDEX_DIR), embedding_function=emb, collection_name="curriculum").delete_collection()
+    except Exception:
+        pass
+    if total:
+        store = Chroma(embedding_function=emb, persist_directory=str(INDEX_DIR), collection_name="curriculum")
+        batch = 64
+        for start in range(0, total, batch):
+            store.add_documents(all_chunks[start:start + batch])
+            if progress:
+                progress(min(start + batch, total), total)
+
+    _save_parents(parents)
+    marker.write_text(digest)
+    return total
+
+
+def index_documents(pdf_bytes: bytes, filename: str, full_text: str = "", embeddings=None, progress=None) -> int:
+    """兼容入口：从 PDF（或已提取全文）建立索引。优先直接调用 index_text。"""
     from io import BytesIO
 
     import pdfplumber
-    from langchain_community.vectorstores import Chroma
 
     digest = hashlib.sha256(pdf_bytes).hexdigest()
-    marker = INDEX_DIR / "source.sha256"
-    if marker.exists() and marker.read_text() == digest:
-        return 0
-
-    # 1. 取全文：优先复用解析阶段已提取的旁车缓存，否则再读 PDF
     if not full_text:
         try:
             sidecar = Path("data/cache") / f"fulltext-{digest[:16]}.txt"
@@ -105,29 +141,7 @@ def index_documents(pdf_bytes: bytes, filename: str, full_text: str = "", embedd
     if not full_text:
         with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
             full_text = "\n".join(page.extract_text() or "" for page in pdf.pages if page.extract_text())
-
-    # 2. 按章节切父块
-    chapters = _split_chapters(full_text)
-    parents: dict[str, dict] = {}
-    all_chunks: list[Document] = []
-
-    splitter = RecursiveCharacterTextSplitter(chunk_size=300, chunk_overlap=50)
-    for parent_id, chapter in enumerate(chapters):
-        parents[str(parent_id)] = {"title": chapter["title"], "content": chapter["content"]}
-        # 父块切碎片
-        sub_docs = splitter.split_documents([Document(page_content=chapter["content"], metadata={})])
-        for sub in sub_docs:
-            all_chunks.append(Document(
-                page_content=sub.page_content,
-                metadata={"parent_id": str(parent_id), "title": chapter["title"], "source": filename},
-            ))
-
-    # 3. 存父块 + 碎片入向量库
-    INDEX_DIR.mkdir(parents=True, exist_ok=True)
-    _save_parents(parents)
-    Chroma.from_documents(all_chunks, embeddings or _embeddings(), persist_directory=str(INDEX_DIR), collection_name="curriculum")
-    marker.write_text(digest)
-    return len(all_chunks)
+    return index_text(full_text, filename, embeddings=embeddings, progress=progress)
 
 
 def retrieve_sections(question: str, k: int = 6) -> list[dict]:

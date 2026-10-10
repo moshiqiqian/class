@@ -9,6 +9,10 @@ DEFAULTS: dict[str, object] = {
     "parsed": False,                      # 是否已解析培养方案
     "curriculum_pdf_bytes": None,         # 培养方案 PDF 字节
     "curriculum_pdf_name": None,          # 培养方案文件名
+    "toc": None,                          # 目录扫描结果（学院/专业/页码树）
+    "toc_scanned": False,                 # 是否已完成目录扫描（第一阶段）
+    "selected_unit": None,                # 第2步所选的学院/专业单元
+    "pending_workspace": "",              # 待绑定的工作区（解析正文后绑定）
     "profile": None,                      # 学生画像
     "credits_confirmed": False,           # 是否已确认学分
     # —— 阶段 C 的中间状态，切页不丢 ——
@@ -46,7 +50,7 @@ def unlock(stage: int) -> bool:
     if stage == 1:
         return True
     if stage == 2:
-        return st.session_state.parsed
+        return st.session_state.parsed or st.session_state.toc_scanned
     if stage == 3:
         return st.session_state.profile is not None
     if stage == 4:

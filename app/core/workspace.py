@@ -125,6 +125,10 @@ def load_into_session(name: str) -> bool:
     st.session_state.parsed_catalog = []
     st.session_state.curriculum_pdf_bytes = None
     st.session_state.curriculum_pdf_name = None
+    st.session_state.toc = None
+    st.session_state.toc_scanned = False
+    st.session_state.selected_unit = None
+    st.session_state.pending_workspace = ""
     st.session_state.profile = None
     st.session_state.credits_confirmed = False
     st.session_state.transcript_records = []

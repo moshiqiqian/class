@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-import threading
-
 import streamlit as st
 
-from app.core.extract_courses import load_catalog_by_cache, load_or_parse
+from app.core.extract_courses import scan_toc
 from app.core.workspace import (
-    bind_pdf,
     create_workspace,
     delete_workspace_by_name,
-    find_cache_file,
     get_workspace,
     list_workspaces,
     name_exists,
@@ -119,19 +115,11 @@ def _change_dialog(workspace_name: str) -> None:
             st.rerun()
         return
 
-    existing_cache = find_cache_file(upload.getvalue())
-    if existing_cache:
-        st.info("检测到该文档之前已解析过，可**复用**已有结果，或**重新解析**（当解析逻辑更新后，建议重新解析）。")
-        col_reuse, col_reparse = st.columns(2)
-        with col_reuse:
-            if st.button("复用并绑定", type="primary", use_container_width=True):
-                _parse_and_bind(workspace_name, upload, reuse=existing_cache)
-        with col_reparse:
-            if st.button("重新解析并绑定", use_container_width=True):
-                _parse_and_bind(workspace_name, upload, force=True)
-    else:
-        if st.button("解析并绑定", type="primary", use_container_width=True):
-            _parse_and_bind(workspace_name, upload)
+    st.caption("将先扫描目录（秒级）；正式解析在你选好学院/专业后进行。")
+    if st.button("扫描目录并绑定", type="primary", use_container_width=True):
+        _scan_and_bind(workspace_name, upload)
+    if st.button("取消", use_container_width=True):
+        st.rerun()
 
 
 def _activate_by_name(name: str) -> None:
@@ -146,85 +134,37 @@ def _render_upload(workspace_name: str, ws: dict | None) -> None:
     if upload is None:
         return
 
-    existing_cache = find_cache_file(upload.getvalue())
-    if existing_cache:
-        st.info("检测到该文档之前已解析过，可**复用**已有结果，或**重新解析**（当解析逻辑更新后，建议重新解析）。")
-        col_reuse, col_reparse = st.columns(2)
-        with col_reuse:
-            if st.button("复用并绑定到当前工作区", type="primary", use_container_width=True):
-                _parse_and_bind(workspace_name, upload, reuse=existing_cache)
-        with col_reparse:
-            if st.button("重新解析并绑定", use_container_width=True):
-                _parse_and_bind(workspace_name, upload, force=True)
-    else:
-        if st.button("解析并绑定到当前工作区", type="primary", use_container_width=True):
-            _parse_and_bind(workspace_name, upload)
+    st.caption("将先扫描目录（秒级）；正式解析在你选好学院/专业后进行。")
+    if st.button("扫描目录并绑定到当前工作区", type="primary", use_container_width=True):
+        _scan_and_bind(workspace_name, upload)
 
 
-def _parse_and_bind(workspace_name: str, upload, reuse: str = "", force: bool = False) -> None:
-    """解析 PDF（或复用缓存）并绑定到指定工作区。force=True 时忽略旧缓存重新解析。"""
+def _scan_and_bind(workspace_name: str, upload) -> None:
+    """第一阶段：只扫描目录，建立工作区绑定；正文解析放到第 2 步选好专业/学院后进行。"""
     pdf_bytes = upload.getvalue()
-
-    if reuse and not force:
-        cache_file = reuse
-    else:
-        progress_bar = st.progress(0.0, text="正在解析培养方案…（首次较慢，请勿刷新）")
-
-        def _on_progress(done: int, total: int) -> None:
-            progress_bar.progress(min(done / max(total, 1), 1.0), text=f"正在解析培养方案… {done}/{total} 页")
-
+    with st.spinner("正在扫描培养方案目录…"):
         try:
-            load_or_parse(pdf_bytes, upload.name, force=force, progress=_on_progress)
-        except (ValueError, OSError) as error:
-            progress_bar.empty()
-            st.error(f"解析失败：{error}")
+            toc = scan_toc(pdf_bytes, upload.name)
+        except Exception as error:  # noqa: BLE001 展示给用户
+            st.error(f"目录扫描失败：{error}")
             return
-        progress_bar.empty()
-        cache_file = _cache_name(pdf_bytes)
 
-    # 绑定方案到工作区
-    bind_pdf(workspace_name, upload.name, cache_file)
-    try:
-        catalog = load_catalog_by_cache(cache_file)
-    except FileNotFoundError:
-        st.error("缓存文件缺失，请重新解析。")
-        return
-    st.session_state.parsed_catalog = catalog
-    st.session_state.parsed = True
-    st.session_state.curriculum_pdf_name = upload.name
     st.session_state.curriculum_pdf_bytes = pdf_bytes
+    st.session_state.curriculum_pdf_name = upload.name
+    st.session_state.toc = toc
+    st.session_state.toc_scanned = True
+    st.session_state.parsed = False
+    st.session_state.parsed_catalog = []
+    st.session_state.selected_unit = None
+    st.session_state.pending_workspace = workspace_name
     reset_after(1)
 
-    # 建立 RAG 索引：放到后台线程，避免长时间阻塞导致界面无响应/白屏。
-    # 索引就绪前问答会回退到完整原文，功能不受影响。
-    index_msg = ""
-    if not reuse or force:
-        _start_background_index(pdf_bytes, upload.name)
-        index_msg = "，检索索引正在后台建立（不影响使用）"
-
-    st.session_state.flash = f"✅ 培养方案解析并绑定成功{index_msg}。"
+    if toc.get("has_toc") and toc.get("units"):
+        st.session_state.flash = f"✅ 已扫描目录：共 {len(toc['units'])} 个专业/大类。请进入「2. 学生信息」选择你的学院与专业，再解析正文。"
+    else:
+        st.session_state.flash = "✅ 未发现目录（可能是单一专业方案）。请进入「2. 学生信息」解析。"
+    st.session_state.stage = 2
     st.rerun()
-
-
-_INDEX_LOCK = threading.Lock()
-
-
-def _start_background_index(pdf_bytes: bytes, filename: str) -> None:
-    """后台线程建立 RAG 索引；失败静默（问答会回退到完整原文）。"""
-
-    def _work() -> None:
-        if not _INDEX_LOCK.acquire(blocking=False):
-            return  # 已有索引任务在跑，避免并发写向量库
-        try:
-            from app.core.rag import build_embeddings, index_documents
-
-            index_documents(pdf_bytes, filename, embeddings=build_embeddings())
-        except Exception:
-            pass
-        finally:
-            _INDEX_LOCK.release()
-
-    threading.Thread(target=_work, name="rag-index", daemon=True).start()
 
 
 def _cache_name(pdf_bytes: bytes) -> str:
