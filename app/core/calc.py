@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
@@ -46,6 +47,53 @@ def enrollment_year_bounds(today: date | None = None) -> tuple[int, int]:
 
 def empty_credits() -> dict[str, float]:
     return {platform: 0.0 for platform in PLATFORMS}
+
+
+def effective_credits(profile: dict) -> dict[str, float]:
+    """已获学分 + 本学期待获得学分（课表/网课）合并，供缺口与规划使用。"""
+    earned = {k: float(v or 0) for k, v in (profile.get("completed_credits") or {}).items()}
+    for platform, value in (profile.get("pending_credits") or {}).items():
+        earned[platform] = earned.get(platform, 0.0) + float(value or 0)
+    return earned
+
+
+def _norm_name(name: object) -> str:
+    return re.sub(r"\s+", "", str(name or "")).replace("（", "(").replace("）", ")")
+
+
+def schedule_platform_credits(
+    curriculum: dict,
+    schedule_courses: list[dict],
+    online_names: tuple[str, ...] | list[str] = (),
+) -> tuple[dict[str, float], list[str]]:
+    """把本学期课表/网课按名称匹配到培养方案平台，返回 ({平台: 待获得学分}, 未匹配名单)。
+
+    课表课程按培养方案的平台归类；学分优先取课表值，取不到则用培养方案值。
+    这些是「本学期待获得学分」，规划时与已获得学分合并计算。
+    """
+    by_name: dict[str, dict] = {}
+    for course in curriculum.get("courses", []):
+        by_name.setdefault(_norm_name(course["name"]), course)
+
+    result: dict[str, float] = {}
+    unmatched: list[str] = []
+    for item in schedule_courses:
+        name = item.get("name", "")
+        course = by_name.get(_norm_name(name))
+        if course is None:
+            unmatched.append(name)
+            continue
+        platform = course.get("platform") or "未分类"
+        credits = float(item.get("credits", 0) or 0) or float(course.get("credits", 0) or 0)
+        result[platform] = result.get(platform, 0.0) + credits
+    for name in online_names:
+        course = by_name.get(_norm_name(name))
+        if course is None:
+            unmatched.append(name)
+            continue
+        platform = course.get("platform") or "未分类"
+        result[platform] = result.get(platform, 0.0) + float(course.get("credits", 0) or 0)
+    return result, unmatched
 
 
 def calculate_gap(requirements: dict[str, float], earned: dict[str, float]) -> dict[str, dict[str, float]]:
@@ -193,9 +241,9 @@ def build_plan(profile: dict, curriculum: dict, advice: dict[str, str] | None = 
     remaining = _remaining_courses(curriculum, current, completed)
 
     # 缺口（确定性计算，LLM 不改数值）
-    gap = calculate_gap(curriculum.get("credit_requirements", {}), profile.get("completed_credits", {}))
+    gap = calculate_gap(curriculum.get("credit_requirements", {}), effective_credits(profile))
     total_required = curriculum.get("credit_requirements", {}).get("毕业总学分")
-    total_earned = sum(float(v) for v in profile.get("completed_credits", {}).values())
+    total_earned = sum(float(v) for v in effective_credits(profile).values())
 
     # 已修课程回顾（之前学期）
     completed_courses = _completed_courses(curriculum, completed)
@@ -324,9 +372,9 @@ def build_semester_plan(profile: dict, curriculum: dict, target_semester: int) -
         "total_credits": round(total, 1),
         "required_credits": round(required_total, 1),
         "course_count": len(rows),
-        "gap": calculate_gap(curriculum.get("credit_requirements", {}), profile.get("completed_credits", {})),
+        "gap": calculate_gap(curriculum.get("credit_requirements", {}), effective_credits(profile)),
         "total_required": curriculum.get("credit_requirements", {}).get("毕业总学分"),
-        "total_earned": sum(float(v) for v in profile.get("completed_credits", {}).values()),
+        "total_earned": sum(float(v) for v in effective_credits(profile).values()),
         "warnings": [],
     }
 
@@ -349,7 +397,7 @@ def build_career_plans(profile: dict, curriculum: dict) -> dict:
     courses = curriculum.get("courses", [])
     required = [c for c in courses if c.get("required", True)]
     electives = [c for c in courses if not c.get("required", True)]
-    earned = profile.get("completed_credits", {})
+    earned = effective_credits(profile)
     completed = set(profile.get("completed_courses", []))
     current = int(profile.get("current_semester", 1))
 
@@ -504,7 +552,7 @@ def compare_career_plans(profile: dict, curriculum: dict) -> dict:
 def check_graduation(profile: dict, curriculum: dict) -> dict:
     """毕业达标检查：各平台学分 + 总学分 + 必修覆盖 + 结论。"""
     requirements = curriculum.get("credit_requirements", {})
-    earned = profile.get("completed_credits", {})
+    earned = effective_credits(profile)
     completed = set(profile.get("completed_courses", []))
 
     platforms = {}

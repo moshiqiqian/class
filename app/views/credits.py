@@ -143,27 +143,46 @@ def render() -> None:
 
     # 回显：若本次没有计算（如切换模式或返回），用已保存的 profile 数据
     if not completed_credits and profile.get("completed_credits"):
-        completed_credits = profile["completed_credits"]
+        completed_credits = dict(profile["completed_credits"])
+    else:
+        completed_credits = dict(completed_credits)
     if not completed_courses and profile.get("completed_courses"):
-        completed_courses = profile["completed_courses"]
+        completed_courses = list(profile["completed_courses"])
+    else:
+        completed_courses = list(completed_courses)
     if not failed and profile.get("failed_courses"):
         failed = profile["failed_courses"]
 
+    # 本学期待获得学分（课表 + 网课）：与已获学分合并，规划时一起算，不忽略
+    from app.core.calc import schedule_platform_credits
+    pending, unmatched = schedule_platform_credits(
+        _curriculum(), st.session_state.get("schedule_courses", []), st.session_state.get("schedule_online", [])
+    )
+    earned_only = dict(completed_credits)
+    for platform, value in pending.items():
+        completed_credits[platform] = completed_credits.get(platform, 0.0) + value
+    for name in _schedule_names():
+        if name not in completed_courses:
+            completed_courses.append(name)
+    pending_total = sum(pending.values())
+
     if mode == "手动填写" or records or completed_credits:
-        st.subheader("已获学分汇总")
-        summary = pd.DataFrame([{"平台": k, "已获学分": v} for k, v in completed_credits.items()])
-        st.dataframe(summary, use_container_width=True)
-        total = sum(v for v in completed_credits.values())
-        st.caption(f"已获学分总计：**{total}** 学分")
+        st.subheader("学分汇总（已获 + 本学期待获得）")
+        platforms = list(dict.fromkeys(list(earned_only.keys()) + list(pending.keys())))
+        rows = [{"平台": k, "已获": earned_only.get(k, 0.0), "本学期待获得": pending.get(k, 0.0), "合计": completed_credits.get(k, 0.0)} for k in platforms]
+        st.dataframe(pd.DataFrame(rows), use_container_width=True)
+        st.caption(
+            f"已获 {sum(earned_only.values()):.1f} + 本学期待获得 {pending_total:.1f} "
+            f"= 合计 **{sum(completed_credits.values()):.1f}** 学分（规划按合计计算）"
+        )
+        if unmatched:
+            st.caption("⚠️ 未匹配到培养方案的课表课程（未计入平台学分）：" + "、".join(unmatched))
 
         def _confirm() -> None:
-            names = list(completed_courses)
-            for name in _schedule_names():
-                if name not in names:
-                    names.append(name)
             profile.update({
-                "completed_credits": completed_credits,
-                "completed_courses": names,
+                "completed_credits": earned_only,
+                "pending_credits": pending,
+                "completed_courses": completed_courses,
                 "failed_courses": failed,
                 "missing_semesters": missing,
             })
@@ -182,12 +201,13 @@ def render() -> None:
     else:
         footer(3, "进入智能对话 →", 5, disabled=True)
 
-    # 无成绩单（如大一新生）：直接用课表作为修读状态进入问答
+    # 无成绩单（如大一新生）：用课表（本学期待获得学分）作为修读状态进入问答
     st.divider()
     if st.button("没有成绩单，直接进入问答（如大一新生）", use_container_width=True):
         profile.update({
-            "completed_credits": {},
-            "completed_courses": _schedule_names(),
+            "completed_credits": earned_only,
+            "pending_credits": pending,
+            "completed_courses": completed_courses,
             "failed_courses": [],
             "missing_semesters": [],
         })
