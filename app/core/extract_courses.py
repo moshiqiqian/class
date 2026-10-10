@@ -96,19 +96,27 @@ def _requirements_from_table(table: list[list[object]]) -> dict[str, float]:
 
 
 def _courses_from_table(table: list[list[object]], college: str, major: str, last_category: str = "未分类") -> tuple[list[dict], str]:
-    """解析一张课程表。返回 (课程列表, 更新后的 last_category)，last_category 跨页向前填充。"""
+    """解析一张课程表。返回 (课程列表, 更新后的 last_category)。
+
+    处理合并单元格：同一「课程性质」段内，若学期/备注只出现在某一行（合并单元格），
+    则向前+向后填充到该段所有行。
+    """
     if len(table) < 2:
         return [], last_category
     headers = [_tight(item) for item in table[0]]
-    name_i, credit_i = _index(headers, ("课程名称", "课程名")), _index(headers, ("学分",))
-    # 「课程性质」列（通识必修/专业必修等细分）优先于「课程类别」列（通识教育平台等大类）
+    name_i = _index(headers, ("课程名称", "课程名"))
+    credit_i = _index(headers, ("学分",))
     category_i = _index(headers, ("课程性质", "性质"))
     if category_i is None:
         category_i = _index(headers, ("课程类别", "类别"))
     term_i = _index(headers, ("开课学期", "修读学期", "学期"))
+    note_i = _index(headers, ("备注",))
     if name_i is None or credit_i is None:
         return [], last_category
-    result = []
+
+    # 第一遍：读取原始行
+    raw: list[dict] = []
+    cur_category = last_category
     for row in table[1:]:
         if len(row) <= max(name_i, credit_i):
             continue
@@ -118,16 +126,64 @@ def _courses_from_table(table: list[list[object]], college: str, major: str, las
             credits = float(re.search(r"\d+(?:\.\d+)?", credit).group())
         except AttributeError:
             continue
-        if category_i is not None and len(row) > category_i:
-            if raw_category := _tight(row[category_i]):
-                last_category = raw_category
-        category = last_category
-        term = _to_term(row[term_i]) if term_i is not None and len(row) > term_i else None
-        if not name or term is None:
+        if not name:
             continue
-        platform = next((item for item in ("通识必修", "通识选修", "学科基础", "专业必修", "专业选修", "实践必修", "实践教学") if item in category), category)
-        result.append({"name": name, "credits": credits, "platform": "实践必修" if platform == "实践教学" else platform, "category": category, "semester": term, "required": "选修" not in category, "note": "", "college": college, "major": major})
-    return result, last_category
+        if category_i is not None and len(row) > category_i:
+            if rc := _tight(row[category_i]):
+                cur_category = rc
+        term = _to_term(row[term_i]) if term_i is not None and len(row) > term_i else None
+        note = _tight(row[note_i]) if note_i is not None and len(row) > note_i else ""
+        raw.append({"name": name, "credits": credits, "category": cur_category, "term": term, "note": note})
+
+    # 第二遍：按「同一 category 连续段」做合并单元格填充（学期 + 备注）
+    _fill_merged(raw)
+
+    result = []
+    for item in raw:
+        category = item["category"]
+        term = item["term"]
+        if term is None:
+            continue  # 无学期信息的行无法排入规划，跳过
+        platform = next((p for p in ("通识必修", "通识选修", "学科基础", "专业必修", "专业选修", "实践必修", "实践教学") if p in category), category)
+        result.append({
+            "name": item["name"], "credits": item["credits"],
+            "platform": "实践必修" if platform == "实践教学" else platform,
+            "category": category, "semester": term,
+            "required": "选修" not in category,
+            "note": item["note"], "college": college, "major": major,
+        })
+    return result, (raw[-1]["category"] if raw else last_category)
+
+
+def _fill_merged(rows: list[dict]) -> None:
+    """段内（同一 category）对空的 term/note 用同段非空值填充（修复合并单元格）。
+
+    仅在整段只有一个唯一非空值时才填充，避免把不同学期的课错误统一。
+    """
+    if not rows:
+        return
+    categories = [r["category"] for r in rows]
+    i = 0
+    while i < len(rows):
+        j = i
+        while j < len(rows) and categories[j] == categories[i]:
+            j += 1
+        segment = rows[i:j]
+        # term：段内唯一非空值才回填
+        terms = {r["term"] for r in segment if r["term"] is not None}
+        if len(terms) == 1:
+            only = next(iter(terms))
+            for r in segment:
+                if r["term"] is None:
+                    r["term"] = only
+        # note：段内唯一非空值才回填（如「必选」覆盖整个模块块）
+        notes = {r["note"] for r in segment if r["note"]}
+        if len(notes) == 1:
+            only_note = next(iter(notes))
+            for r in segment:
+                if not r["note"]:
+                    r["note"] = only_note
+        i = j
 
 
 def parse_pdf(pdf_bytes: bytes, filename: str) -> list[dict]:

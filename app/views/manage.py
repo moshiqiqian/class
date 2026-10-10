@@ -71,14 +71,12 @@ def _reparse(workspace_name: str, upload, cache: str) -> None:
     """重新解析 PDF 并更新到指定工作区。"""
     pdf_bytes = upload.getvalue()
     if not cache:
-        with st.status("正在解析培养方案…可能需要 1~2 分钟", expanded=True) as status:
+        with st.spinner("正在解析培养方案…（大文件可能需要 1~2 分钟，请勿刷新）"):
             try:
                 load_or_parse(pdf_bytes, upload.name, force=True)
             except (ValueError, OSError) as error:
-                status.update(label="解析失败", state="error")
-                st.error(str(error))
+                st.error(f"解析失败：{error}")
                 return
-            status.update(label="解析完成", state="complete")
         import hashlib
         cache = f"catalog-{hashlib.sha256(pdf_bytes).hexdigest()[:16]}.json"
 
@@ -92,5 +90,6 @@ def _reparse(workspace_name: str, upload, cache: str) -> None:
         except FileNotFoundError:
             pass
     st.session_state[f"reupload_{workspace_name}"] = False
-    st.success(f"工作区「{workspace_name}」的方案已更新。")
+    st.session_state.flash = f"✅ 工作区「{workspace_name}」的培养方案已更新。"
+    st.session_state.manage_page = False
     st.rerun()
