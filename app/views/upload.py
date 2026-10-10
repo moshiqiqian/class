@@ -124,7 +124,6 @@ def _activate_by_name(name: str) -> None:
     """切换到已有工作区：完整重载（方案+学生+成绩单），并 rerun 重新渲染。"""
     from app.core.workspace import load_into_session
     if load_into_session(name):
-        _warmup_models()
         st.rerun()
 
 
@@ -174,7 +173,7 @@ def _parse_and_bind(workspace_name: str, upload, reuse: str = "") -> None:
     st.session_state.index_ready = False
     reset_after(1)
 
-    # 建立 RAG 索引
+    # 建立 RAG 索引（仅首次解析时；用于原文缺失时的兜底检索）
     if not reuse:
         with st.status("正在建立检索索引…首次需加载模型，可能需要 1~2 分钟", expanded=True) as status:
             try:
@@ -185,8 +184,6 @@ def _parse_and_bind(workspace_name: str, upload, reuse: str = "") -> None:
             except Exception as e:
                 status.update(label="索引建立失败（不影响结构化问答）", state="error")
                 st.warning(f"索引建立失败：{e}，结构化问答和选课规划仍可用。")
-    else:
-        _warmup_models()
 
     st.rerun()
 

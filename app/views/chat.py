@@ -304,17 +304,16 @@ def _render_career_plan(plan: dict) -> None:
     plans = plan.get("plans")
     if not plans:
         timeline = plan.get("timeline", {})
-        plans = [{"name": "整体规划", "desc": "", "timeline": timeline,
-                  "loads": {t: sum(c["学分"] for c in rows) for t, rows in timeline.items()}, "current_courses": []}]
+        plans = [{"name": "整体规划", "desc": "", "timeline": timeline, "school": {}, "loads": {}, "current_courses": []}]
 
     current = plan.get("current_semester", 1)
     total_required = plan.get("total_required")
-    p = plans[0]  # 默认只展示第一套（综合推荐）
+    p = plans[0]  # 默认只展示第一套
 
     st.markdown(
         f"- **当前学期**：第 {current} 学期\n"
         f"- **毕业需修**：{total_required if total_required else '—'} 学分\n"
-        f"- ⚠️ **约束**：必修课固定在培养方案**开课学期**不可挪动；选修课从各学期**实际开设**的课程中选择。"
+        f"- **说明**：通识必修需你自行确认选课；其余必修由**学校安排**（无需自选）；选修仅在平台**有缺口**时推荐；课程按**开课学期**安排。"
     )
     st.divider()
 
@@ -322,61 +321,75 @@ def _render_career_plan(plan: dict) -> None:
     cur_courses = p.get("current_courses", [])
     if cur_courses:
         cur_credits = sum(c["学分"] for c in cur_courses)
-        st.success(f"**本学期（第 {current} 学期）建议选修 {len(cur_courses)} 门课、共 {cur_credits:.1f} 学分：**")
+        st.success(f"**本学期（第 {current} 学期）建议选课 {len(cur_courses)} 门、共 {cur_credits:.1f} 学分：**")
         st.dataframe(pd.DataFrame(cur_courses), use_container_width=True)
-    elif current <= 8:
-        st.info(f"第 {current} 学期该方案无课程安排。")
+    else:
+        st.info(f"第 {current} 学期无需你自行选课（或已修完该学期课程）。")
 
-    # 各学期负担
+    # 各学期负担（覆盖 1-8 学期）
     loads = p.get("loads", {})
     if loads:
+        st.markdown("**各学期负担**")
         load_df = pd.DataFrame([
-            {"学期": f"第{t}学期（大{['一','二','三','四'][(t-1)//2]}{'上' if t%2==1 else '下'}）", "本学期学分": v}
+            {"学期": f"第{t}学期（大{['一','二','三','四'][(t-1)//2]}{'上' if t%2==1 else '下'}）",
+             "自选学分": v.get("自选", 0), "学校安排学分": v.get("学校安排", 0), "合计": v.get("合计", 0)}
             for t, v in loads.items()
         ])
-        st.markdown("**各学期负担**")
         st.dataframe(load_df, use_container_width=True)
 
-    # 完整逐学期模板
+    # 逐学期模板
     st.markdown("**逐学期选课模板**")
-    for term, rows in p["timeline"].items():
+    for term in range(1, 9):
+        rows = p["timeline"].get(term, [])
+        school = p.get("school", {}).get(term, [])
+        if not rows and not school:
+            continue
+        year, half = (term + 1) // 2, "上" if term % 2 == 1 else "下"
         total = sum(c["学分"] for c in rows)
-        required = [c for c in rows if c.get("性质") == "必修"]
-        elective = [c for c in rows if c.get("性质") == "选修"]
-        year = (term + 1) // 2
-        half = "上" if term % 2 == 1 else "下"
-        st.markdown(f"**第 {term} 学期（大{['一','二','三','四'][year-1]}{half}）** · {len(rows)} 门 / {total:.1f} 学分")
-        if required:
-            st.markdown("　必修：" + "、".join(f"{c['课程名称']}({c['学分']})" for c in required))
-        if elective:
-            st.markdown("　选修：" + "、".join(f"{c['课程名称']}({c['学分']})" for c in elective))
+        st.markdown(f"**第 {term} 学期（大{['一','二','三','四'][year-1]}{half}）** · 需自选 {len(rows)} 门 / {total:.1f} 学分")
+        if rows:
+            st.markdown("　需选：" + "、".join(f"{c['课程名称']}({c['学分']})" for c in rows))
+        if school:
+            st.markdown("　学校安排：" + "、".join(f"{c['课程名称']}({c['学分']})" for c in school))
 
     # 导出 Excel
     try:
-        st.download_button("⬇️ 下载选课表（Excel）", data=_plan_to_excel(p["timeline"]),
+        st.download_button("⬇️ 下载选课表（Excel）", data=_plan_to_excel(p),
                            file_name="选课规划.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                            use_container_width=True)
     except Exception:
         pass
 
-    # 末尾：定制化提示（不一次性输出所有方案）
     st.info("💡 以上是为你生成的默认方案。**如需其他定制**（如「提前集中修完」「某学期减负」「对比不同方案」），"
             "可以直接告诉我，我会针对性重新生成。")
 
 
-def _plan_to_excel(timeline: dict) -> bytes:
-    """把选课时间轴导出为 Excel 字节。"""
+def _plan_to_excel(p: dict) -> bytes:
+    """把选课方案导出为排版清晰的 Excel（按学期分块，含需选/学校安排）。"""
     import io
     rows = []
-    for t in sorted(timeline):
-        for c in timeline[t]:
-            rows.append({"学期": f"第 {t} 学期", "课程名称": c.get("课程名称", ""),
-                         "类别": c.get("类别", ""), "学分": c.get("学分", ""), "性质": c.get("性质", "")})
+    for term in range(1, 9):
+        timeline = p.get("timeline", {}).get(term, [])
+        school = p.get("school", {}).get(term, [])
+        if not timeline and not school:
+            continue
+        year, half = (term + 1) // 2, "上" if term % 2 == 1 else "下"
+        label = f"第{term}学期（大{['一','二','三','四'][year-1]}{half}）"
+        for c in timeline:
+            rows.append({"学期": label, "类型": "需自选", "课程名称": c.get("课程名称", ""),
+                         "类别": c.get("类别", ""), "学分": c.get("学分", "")})
+        for c in school:
+            rows.append({"学期": label, "类型": "学校安排", "课程名称": c.get("课程名称", ""),
+                         "类别": c.get("类别", ""), "学分": c.get("学分", "")})
     df = pd.DataFrame(rows)
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="选课规划")
+        ws = writer.sheets["选课规划"]
+        # 列宽
+        for col, width in zip("ABCDE", (18, 10, 28, 14, 8)):
+            ws.column_dimensions[col].width = width
     return buf.getvalue()
 
 

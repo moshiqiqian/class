@@ -333,20 +333,25 @@ MAX_ELECTIVE_CREDITS_PER_SEMESTER = 8.0
 
 
 def build_career_plans(profile: dict, curriculum: dict) -> dict:
-    """全大学生涯规划：产出多套可选方案（第 1-8 学期全覆盖）。
+    """全大学生涯规划（第 1-8 学期全覆盖）。
 
-    约束：必修课固定在开课学期不可挪动；选修课从各学期实际开设的课程中选择。
-    方案差异体现在「选修课的选择策略」上。
+    规则：
+    - 基于学生已获学分：某平台已达标则不再选该类课程。
+    - 通识必修课：未修部分由学生确认选课。
+    - 其他必修课（学科基础/专业必修/实践必修）：由学校安排，仅提示，不作为选课建议。
+    - 选修课：只在平台有缺口时，从实际开设的选修课中挑选。
     """
     requirements = curriculum.get("credit_requirements", {})
     courses = curriculum.get("courses", [])
     required = [c for c in courses if c.get("required", True)]
     electives = [c for c in courses if not c.get("required", True)]
+    earned = profile.get("completed_credits", {})
+    completed = set(profile.get("completed_courses", []))
     current = int(profile.get("current_semester", 1))
 
     plans = [
-        _career_plan(required, electives, requirements, strategy="balanced"),
-        _career_plan(required, electives, requirements, strategy="early"),
+        _career_plan(required, electives, requirements, earned, completed, strategy="balanced"),
+        _career_plan(required, electives, requirements, earned, completed, strategy="early"),
     ]
     for p in plans:
         p["current_courses"] = p["timeline"].get(current, [])
@@ -356,34 +361,43 @@ def build_career_plans(profile: dict, curriculum: dict) -> dict:
         "plans": plans,
         "current_semester": current,
         "total_required": requirements.get("毕业总学分"),
-        "gap": {k: {"required": v, "earned": 0, "missing": v} for k, v in requirements.items() if k != "毕业总学分"},
-        "note": "必修课固定在培养方案开课学期；选修课从各学期实际开设的课程中选择。",
+        "gap": {k: {"required": v, "earned": float(earned.get(k, 0)), "missing": max(0.0, float(v) - float(earned.get(k, 0)))} for k, v in requirements.items() if k != "毕业总学分"},
+        "note": "通识必修由学生确认选课；其余必修由学校安排；选修仅在平台有缺口时选择。",
     }
 
 
-def _career_plan(required: list[dict], electives: list[dict], requirements: dict, strategy: str) -> dict:
+def _career_plan(required: list[dict], electives: list[dict], requirements: dict, earned: dict, completed: set, strategy: str) -> dict:
     """生成一套生涯方案。strategy: balanced=均衡 / early=提前集中。"""
-    timeline: dict[int, list[dict]] = {s: [] for s in range(1, 9)}
+    timeline: dict[int, list[dict]] = {s: [] for s in range(1, 9)}   # 学生需自选的课
+    school: dict[int, list[dict]] = {s: [] for s in range(1, 9)}     # 学校安排的必修
 
-    # 必修：全部按开课学期（不可挪动）
+    # 必修分类：通识必修（需选）/ 其他必修（学校安排）
     for c in required:
         term = max(1, min(8, int(c.get("semester", 1))))
+        cat = c.get("category", c.get("platform", ""))
         row = _course_row(c)
-        row["状态"] = "必修"
-        timeline[term].append(row)
+        if "通识必修" in cat:
+            if c["name"] in completed:
+                continue
+            row["状态"] = "通识必修"
+            timeline[term].append(row)
+        else:
+            row["状态"] = "学校安排"
+            school[term].append(row)
 
-    # 选修：按平台需求挑选
+    # 选修：仅在该平台有缺口时挑选
     for platform, req in requirements.items():
         if platform == "毕业总学分" or "选修" not in platform:
             continue
-        need = float(req)
-        pool = [c for c in electives if c.get("platform") == platform or c.get("category") == platform]
+        gap = max(0.0, float(req) - float(earned.get(platform, 0)))
+        if gap <= 0:
+            continue  # 已达标，不再选
+        pool = [c for c in electives if (c.get("platform") == platform or c.get("category") == platform) and c["name"] not in completed]
         picked = 0.0
 
         if strategy == "early":
-            # 提前型：优先选开课学期早的选修，尽量往前集中
             for c in sorted(pool, key=lambda c: int(c.get("semester", 1))):
-                if picked >= need:
+                if picked >= gap:
                     break
                 term = max(1, min(8, int(c.get("semester", 1))))
                 row = _course_row(c)
@@ -391,13 +405,12 @@ def _career_plan(required: list[dict], electives: list[dict], requirements: dict
                 timeline[term].append(row)
                 picked += float(c["credits"])
         else:
-            # 均衡型：按学期轮流取，让各学期都有选修
             by_sem: dict[int, list[dict]] = {}
             for c in pool:
                 by_sem.setdefault(max(1, min(8, int(c.get("semester", 1)))), []).append(c)
             terms = sorted(by_sem)
             i = 0
-            while picked < need and any(by_sem.values()):
+            while picked < gap and any(by_sem.values()):
                 t = terms[i % len(terms)]
                 if by_sem[t]:
                     c = by_sem[t].pop(0)
@@ -408,25 +421,30 @@ def _career_plan(required: list[dict], electives: list[dict], requirements: dict
                 i += 1
 
     result_timeline = {t: rows for t, rows in timeline.items() if rows}
+    result_school = {t: rows for t, rows in school.items() if rows}
 
-    # 每学期负担
-    loads = {t: round(sum(c["学分"] for c in rows), 1) for t, rows in result_timeline.items()}
-    # 大四（第 7-8 学期）总学分
-    senior_credits = round(loads.get(7, 0) + loads.get(8, 0), 1)
+    # 每学期负担（含自选 + 学校安排），覆盖 1-8 学期
+    loads = {}
+    for t in range(1, 9):
+        elective_credits = sum(c["学分"] for c in result_timeline.get(t, []))
+        school_credits = sum(c["学分"] for c in result_school.get(t, []))
+        if elective_credits or school_credits:
+            loads[t] = {"自选": round(elective_credits, 1), "学校安排": round(school_credits, 1),
+                        "合计": round(elective_credits + school_credits, 1)}
 
     names = {"balanced": "稳妥均衡型", "early": "提前集中型"}
     descs = {
-        "balanced": "各学期负担较均衡，选修分散到不同学期，适合稳步推进。",
-        "early": "选修尽量安排在开课较早的学期，为大四腾出更多时间（如实习、考研、毕业设计）。",
+        "balanced": "选修分散到不同学期，各学期负担较均衡。",
+        "early": "选修尽量安排在开课较早的学期，为大四腾出时间。",
     }
     return {
         "key": strategy,
         "name": names[strategy],
         "desc": descs[strategy],
         "timeline": result_timeline,
+        "school": result_school,
         "loads": loads,
-        "senior_credits": senior_credits,
-        "total_planned": round(sum(loads.values()), 1),
+        "total_planned": round(sum(v["合计"] for v in loads.values()), 1),
     }
 
 
