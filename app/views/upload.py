@@ -30,27 +30,30 @@ def render() -> None:
     st.subheader("① 选择工作区")
     names = [w["name"] for w in workspaces]
 
-    col_sel, col_new, col_del = st.columns([3, 1, 1], vertical_alignment="bottom")
-    with col_sel:
-        if names:
+    if not names:
+        # 无工作区：直接给一个醒目的大按钮，避免列布局错位
+        st.info("暂无工作区，请先新建一个工作区。")
+        if st.button("🆕 新建工作区", type="primary", use_container_width=True):
+            _create_dialog()
+        selected = None
+    else:
+        col_sel, col_new, col_del = st.columns([3, 1, 1], vertical_alignment="bottom")
+        with col_sel:
             idx = names.index(current) if current in names else 0
             selected = st.selectbox("工作区", names, index=idx, key="ws_select")
-        else:
-            selected = None
-            st.info("暂无工作区，请先点击「新建工作区」。")
-    with col_new:
-        if st.button("🆕 新建工作区", use_container_width=True):
-            _create_dialog()
-    with col_del:
-        if current and current in names:
-            if st.button("🗑️ 删除", use_container_width=True):
-                delete_workspace_by_name(current)
-                _clear_current()
-                st.rerun()
+        with col_new:
+            if st.button("🆕 新建工作区", use_container_width=True):
+                _create_dialog()
+        with col_del:
+            if current and current in names:
+                if st.button("🗑️ 删除", use_container_width=True):
+                    delete_workspace_by_name(current)
+                    _clear_current()
+                    st.rerun()
 
-    # 切换工作区
-    if selected and selected != current:
-        _activate_by_name(selected)
+        # 切换工作区
+        if selected and selected != current:
+            _activate_by_name(selected)
 
     # ============ 第二步：培养方案 ============
     if current:
@@ -116,9 +119,14 @@ def _change_dialog(workspace_name: str) -> None:
 
     existing_cache = find_cache_file(upload.getvalue())
     if existing_cache:
-        st.info("检测到该文档之前已解析过，可直接复用。")
-        if st.button("复用并绑定", type="primary", use_container_width=True):
-            _parse_and_bind(workspace_name, upload, reuse=existing_cache)
+        st.info("检测到该文档之前已解析过，可**复用**已有结果，或**重新解析**（当解析逻辑更新后，建议重新解析）。")
+        col_reuse, col_reparse = st.columns(2)
+        with col_reuse:
+            if st.button("复用并绑定", type="primary", use_container_width=True):
+                _parse_and_bind(workspace_name, upload, reuse=existing_cache)
+        with col_reparse:
+            if st.button("重新解析并绑定", use_container_width=True):
+                _parse_and_bind(workspace_name, upload, force=True)
     else:
         if st.button("解析并绑定", type="primary", use_container_width=True):
             _parse_and_bind(workspace_name, upload)
@@ -138,24 +146,29 @@ def _render_upload(workspace_name: str, ws: dict | None) -> None:
 
     existing_cache = find_cache_file(upload.getvalue())
     if existing_cache:
-        st.info("检测到该文档之前已解析过，可直接复用。")
-        if st.button("复用并绑定到当前工作区", type="primary", use_container_width=True):
-            _parse_and_bind(workspace_name, upload, reuse=existing_cache)
+        st.info("检测到该文档之前已解析过，可**复用**已有结果，或**重新解析**（当解析逻辑更新后，建议重新解析）。")
+        col_reuse, col_reparse = st.columns(2)
+        with col_reuse:
+            if st.button("复用并绑定到当前工作区", type="primary", use_container_width=True):
+                _parse_and_bind(workspace_name, upload, reuse=existing_cache)
+        with col_reparse:
+            if st.button("重新解析并绑定", use_container_width=True):
+                _parse_and_bind(workspace_name, upload, force=True)
     else:
         if st.button("解析并绑定到当前工作区", type="primary", use_container_width=True):
             _parse_and_bind(workspace_name, upload)
 
 
-def _parse_and_bind(workspace_name: str, upload, reuse: str = "") -> None:
-    """解析 PDF（或复用缓存）并绑定到指定工作区。"""
+def _parse_and_bind(workspace_name: str, upload, reuse: str = "", force: bool = False) -> None:
+    """解析 PDF（或复用缓存）并绑定到指定工作区。force=True 时忽略旧缓存重新解析。"""
     pdf_bytes = upload.getvalue()
 
-    if reuse:
+    if reuse and not force:
         cache_file = reuse
     else:
         with st.spinner("正在解析培养方案…（大文件可能需要 1~2 分钟，请勿刷新）"):
             try:
-                load_or_parse(pdf_bytes, upload.name, force=False)
+                load_or_parse(pdf_bytes, upload.name, force=force)
             except (ValueError, OSError) as error:
                 st.error(f"解析失败：{error}")
                 return
@@ -176,7 +189,7 @@ def _parse_and_bind(workspace_name: str, upload, reuse: str = "") -> None:
 
     # 建立 RAG 索引（首次解析时；问答主路径用）
     index_msg = ""
-    if not reuse:
+    if not reuse or force:
         with st.spinner("正在建立检索索引…（首次需加载模型）"):
             try:
                 from app.core.rag import index_documents
