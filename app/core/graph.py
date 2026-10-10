@@ -30,14 +30,17 @@ class GraphState(TypedDict, total=False):
 # 意图分类：LLM 输出结构化 JSON
 _INTENT_PROMPT = (
     "判断学生问题属于哪一类，并判断规划模式。只输出 JSON，不要输出其他内容：\n"
-    '{{"intent": "plan|gap|review|missing|semester_plan|qa", "mode": "early|balanced|career|original", "target_semester": 0}}\n\n'
+    '{{"intent": "plan|gap|review|missing|semester_plan|graduation|compare|retake|qa", "mode": "early|balanced|career|original", "target_semester": 0}}\n\n'
     "分类规则：\n"
-    "- plan：选课规划 / 未来安排（问「下学期选什么课」「怎么规划课程」「提前修完」「接下来学什么」「后面还有什么课」「接下来怎么安排」「我现在该干嘛」「未来怎么规划」）\n"
+    "- plan：选课规划 / 未来安排（问「下学期选什么课」「怎么规划课程」「提前修完」「接下来学什么」「我现在该干嘛」）\n"
     "- semester_plan：为「某一个具体学期」规划课程（问「帮我规划第3学期」「重新规划第1学期」「第5学期该修什么」），target_semester 填该学期号(1-8)\n"
-    "- gap：学分够不够毕业 / 还差多少学分（问「还差多少学分」「学分够不够毕业」「会不会毕不了业」「能不能按时毕业」）\n"
-    "- review：查询「我自己」的成绩/绩点/已修课程/挂科（问「我绩点多少」「我学过哪些课」「我挂了几门」「我成绩最高的一门」）\n"
+    "- gap：学分够不够毕业 / 还差多少学分（问「还差多少学分」「学分够不够毕业」）\n"
+    "- graduation：毕业达标检查（问「我能毕业吗」「还差什么才能毕业」「达标了吗」「能不能按时毕业」「这样选能毕业吗」）\n"
+    "- compare：对比不同的选课方案（问「均衡型和提前型哪个好」「对比一下方案」「两套方案区别」）\n"
+    "- retake：重修/补考规划（问「挂科了怎么重修」「重修怎么安排」「补考怎么弄」）\n"
+    "- review：查询「我自己」的成绩/绩点/已修课程/挂科（问「我绩点多少」「我学过哪些课」「我成绩最高的一门」）\n"
     "- missing：查询缺失哪些学期的成绩单（问「缺哪几个学期」）\n"
-    "- qa：培养方案知识问答（问「培养目标」「毕业要求」「某课程学分/学期/开课时间」「核心课程」「有哪些选修课」「学制」「学位」「还剩几个学期」「哪个学期最忙/课最多」等，以及超纲问题如就业/学费）\n\n"
+    "- qa：培养方案知识问答（问「培养目标」「毕业要求」「必修和选修的区别」「某课程学分/学期/开课时间」「核心课程」「学制」「学位」「还剩几个学期」「哪个学期最忙」等，及超纲问题）\n\n"
     "mode（当 intent=plan 时）：\n"
     "- career：要求「整个大学生涯/大一到大四/大学四年/全程/完整」的整体规划（从头到尾排满 8 个学期）\n"
     "- early：提到提前修完/大四前修完\n"
@@ -86,7 +89,7 @@ def _classify_intent(question: str) -> tuple[str, str, int]:
     raw = _llm().invoke(_INTENT_PROMPT.format(question=question)).content.strip()
     parsed = _parse_intent_json(raw) or {}
     intent = parsed.get("intent", "qa")
-    if intent not in ("plan", "gap", "review", "missing", "semester_plan", "qa"):
+    if intent not in ("plan", "gap", "review", "missing", "semester_plan", "graduation", "compare", "retake", "qa"):
         intent = "qa"
     mode = parsed.get("mode", "balanced")
     if mode not in ("early", "balanced", "career", "original"):
@@ -227,6 +230,44 @@ def _missing_node(state: GraphState) -> dict[str, Any]:
     return {"review_result": {"missing_semesters": missing, "current_semester": profile["current_semester"], "received": received}}
 
 
+def _graduation_node(state: GraphState) -> dict[str, Any]:
+    """毕业达标检查：学分 + 必修覆盖 + 结论。确定性计算。"""
+    from app.core.calc import check_graduation
+    profile, curriculum = state["profile"], state["curriculum"]
+    result = check_graduation(profile, curriculum)
+    result["kind"] = "graduation"
+    return {"review_result": result}
+
+
+def _compare_node(state: GraphState) -> dict[str, Any]:
+    """方案对比：均衡型 vs 提前型，并排对比。"""
+    from app.core.calc import compare_career_plans
+    profile, curriculum = state["profile"], state["curriculum"]
+    result = compare_career_plans(profile, curriculum)
+    result["kind"] = "compare"
+    return {"review_result": result}
+
+
+def _retake_node(state: GraphState) -> dict[str, Any]:
+    """重修/补考规划：列出需重修课程 + 建议。"""
+    from app.core.calc import build_plan
+    profile, curriculum = state["profile"], state["curriculum"]
+    plan = build_plan(profile, curriculum, mode="original")
+    retakes = plan.get("retakes", [])
+    failed = profile.get("failed_courses", [])
+    suggestion = ""
+    if retakes and os.getenv("DEEPSEEK_API_KEY"):
+        try:
+            names = "、".join(r["课程名称"] for r in retakes)
+            suggestion = _llm().invoke(
+                f"学生有需重修/补考的课程：{names}。请用 2~3 句话说明重修安排建议"
+                "（如：尽早安排、避免与大三专业课冲突、补考通过即可）。语气务实。"
+            ).content.strip()
+        except Exception:
+            pass
+    return {"review_result": {"kind": "retake", "retakes": retakes, "failed": failed, "suggestion": suggestion}}
+
+
 def _answer_node(state: GraphState) -> dict[str, Any]:
     """问答节点：上下文含「培养方案原文 + 成绩单 + 学分要求」，由 LLM 针对问题作答。
 
@@ -316,19 +357,25 @@ def build_graph():
     workflow.add_node("plan", _plan_node)
     workflow.add_node("semester_plan", _semester_plan_node)
     workflow.add_node("missing", _missing_node)
+    workflow.add_node("graduation", _graduation_node)
+    workflow.add_node("compare", _compare_node)
+    workflow.add_node("retake", _retake_node)
     workflow.add_node("answer", _answer_node)
 
     workflow.set_entry_point("classify")
-    # review 和 qa 都交给 answer（含成绩单+方案上下文，能智能回答具体问题）
     workflow.add_conditional_edges(
         "classify",
         lambda state: state["intent"],
-        {"plan": "plan", "gap": "plan", "semester_plan": "semester_plan", "review": "answer", "missing": "missing", "qa": "answer"},
+        {"plan": "plan", "gap": "plan",
+         "semester_plan": "semester_plan",
+         "missing": "missing",
+         "graduation": "graduation",
+         "compare": "compare",
+         "retake": "retake",
+         "review": "answer", "qa": "answer"},
     )
-    workflow.add_edge("plan", END)
-    workflow.add_edge("semester_plan", END)
-    workflow.add_edge("missing", END)
-    workflow.add_edge("answer", END)
+    for node in ("plan", "semester_plan", "missing", "graduation", "compare", "retake", "answer"):
+        workflow.add_edge(node, END)
 
     return workflow.compile()
 

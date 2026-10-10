@@ -107,15 +107,9 @@ def _render_chat(profile: dict, curriculum: dict) -> None:
                 _render_plan(plan, intent)
         elif result.get("review_result"):
             review = result["review_result"]
-            if review.get("missing_semesters") is not None:
-                # missing 意图：只回答缺失哪些学期
-                st.session_state.messages.append({"role": "assistant", "content": "缺失学期查询", "missing": review})
-                with st.chat_message("assistant"):
-                    _render_missing(review)
-            else:
-                st.session_state.messages.append({"role": "assistant", "content": "已修课程与绩点回顾", "review": review})
-                with st.chat_message("assistant"):
-                    _render_review(review)
+            st.session_state.messages.append({"role": "assistant", "content": "结果", "review": review})
+            with st.chat_message("assistant"):
+                _render_review_result(review)
         else:
             answer = result.get("answer", "")
             st.session_state.messages.append({"role": "assistant", "content": answer})
@@ -130,11 +124,86 @@ def _render_message(message: dict) -> None:
         if message["role"] == "assistant" and message.get("plan"):
             _render_plan(message["plan"], message.get("intent", "plan"))
         elif message["role"] == "assistant" and message.get("review"):
-            _render_review(message["review"])
+            _render_review_result(message["review"])
         elif message["role"] == "assistant" and message.get("missing"):
             _render_missing(message["missing"])
         else:
             st.markdown(message["content"])
+
+
+def _render_review_result(review: dict) -> None:
+    """按 kind 分派渲染 review_result（graduation/compare/retake/missing/review）。"""
+    kind = review.get("kind")
+    if kind == "graduation":
+        _render_graduation(review)
+    elif kind == "compare":
+        _render_compare(review)
+    elif kind == "retake":
+        _render_retake(review)
+    elif review.get("missing_semesters") is not None:
+        _render_missing(review)
+    else:
+        _render_review(review)
+
+
+def _render_graduation(result: dict) -> None:
+    """毕业达标检查。"""
+    st.markdown("### 🎓 毕业达标检查")
+    if result.get("can_graduate"):
+        st.success(result.get("conclusion", "✅ 已满足毕业要求。"))
+    else:
+        st.warning(result.get("conclusion", "⚠️ 尚未达标。"))
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("已获学分", result.get("total_earned", 0))
+    with col2:
+        st.metric("毕业需修", result.get("total_required", "—"))
+
+    # 各平台达标情况
+    platforms = result.get("platforms", {})
+    if platforms:
+        st.markdown("**各平台达标情况**")
+        rows = [{"平台": k, "要求": v["required"], "已获": v["earned"], "缺口": v["missing"],
+                 "状态": "✅ 达标" if v["ok"] else "⚠️ 未达标"} for k, v in platforms.items()]
+        st.dataframe(pd.DataFrame(rows), use_container_width=True)
+
+    missing = result.get("missing_required", [])
+    if missing:
+        st.markdown(f"**未修必修课（{len(missing)} 门）**")
+        st.dataframe(pd.DataFrame(missing), use_container_width=True)
+
+    if result.get("missing_semesters"):
+        st.caption("注：缺少部分学期成绩单，达标结论可能不完整。")
+
+
+def _render_compare(result: dict) -> None:
+    """方案并排对比。"""
+    st.markdown("### 📊 方案对比")
+    plans = result.get("plans", [])
+    if not plans:
+        st.info("暂无可对比的方案。")
+        return
+    for p in plans:
+        st.markdown(f"- **{p['name']}**：{p.get('desc', '')}")
+    st.markdown("**各学期学分对比**")
+    st.dataframe(pd.DataFrame(result.get("table", [])), use_container_width=True)
+    st.caption("差异体现在选修课的选择策略上；必修课固定在开课学期。")
+
+
+def _render_retake(result: dict) -> None:
+    """重修/补考规划。"""
+    st.markdown("### 🔁 重修 / 补考规划")
+    if result.get("suggestion"):
+        st.markdown(result["suggestion"])
+    retakes = result.get("retakes", [])
+    if retakes:
+        st.dataframe(pd.DataFrame(retakes), use_container_width=True)
+    failed = result.get("failed", [])
+    if failed and not retakes:
+        st.dataframe(pd.DataFrame([{"课程名称": f.get("course"), "学分": f.get("credits"), "状态": f.get("status")} for f in failed]), use_container_width=True)
+    if not retakes and not failed:
+        st.success("你目前没有需要重修或补考的课程。")
 
 
 def _render_missing(missing: dict) -> None:
@@ -229,17 +298,18 @@ def _render_plan(plan: dict, intent: str) -> None:
 
 
 def _render_career_plan(plan: dict) -> None:
-    """全大学生涯规划：多套方案 + 当前学期选课 + 逐学期模板。"""
+    """全大学生涯规划：默认给一套方案 + 当前学期选课 + 逐学期模板 + 可定制提示。"""
     st.markdown("### 📋 大学四年整体规划")
 
-    # 兼容单方案（旧结构）
     plans = plan.get("plans")
     if not plans:
         timeline = plan.get("timeline", {})
-        plans = [{"name": "整体规划", "desc": "", "timeline": timeline, "loads": {t: sum(c["学分"] for c in rows) for t, rows in timeline.items()}, "current_courses": []}]
+        plans = [{"name": "整体规划", "desc": "", "timeline": timeline,
+                  "loads": {t: sum(c["学分"] for c in rows) for t, rows in timeline.items()}, "current_courses": []}]
 
     current = plan.get("current_semester", 1)
     total_required = plan.get("total_required")
+    p = plans[0]  # 默认只展示第一套（综合推荐）
 
     st.markdown(
         f"- **当前学期**：第 {current} 学期\n"
@@ -248,48 +318,66 @@ def _render_career_plan(plan: dict) -> None:
     )
     st.divider()
 
-    # 逐方案展示
-    for idx, p in enumerate(plans):
-        st.markdown(f"## 方案 {idx+1}：{p['name']}")
-        st.caption(p.get("desc", ""))
+    # 当前学期具体选课（重点）
+    cur_courses = p.get("current_courses", [])
+    if cur_courses:
+        cur_credits = sum(c["学分"] for c in cur_courses)
+        st.success(f"**本学期（第 {current} 学期）建议选修 {len(cur_courses)} 门课、共 {cur_credits:.1f} 学分：**")
+        st.dataframe(pd.DataFrame(cur_courses), use_container_width=True)
+    elif current <= 8:
+        st.info(f"第 {current} 学期该方案无课程安排。")
 
-        # 当前学期具体选课（重点！）
-        cur_courses = p.get("current_courses", [])
-        if cur_courses:
-            cur_credits = sum(c["学分"] for c in cur_courses)
-            st.success(
-                f"**本学期（第 {current} 学期）建议选修 {len(cur_courses)} 门课、共 {cur_credits:.1f} 学分：**"
-            )
-            st.dataframe(pd.DataFrame(cur_courses), use_container_width=True)
-        elif current <= 8:
-            st.info(f"第 {current} 学期该方案无课程安排。")
+    # 各学期负担
+    loads = p.get("loads", {})
+    if loads:
+        load_df = pd.DataFrame([
+            {"学期": f"第{t}学期（大{['一','二','三','四'][(t-1)//2]}{'上' if t%2==1 else '下'}）", "本学期学分": v}
+            for t, v in loads.items()
+        ])
+        st.markdown("**各学期负担**")
+        st.dataframe(load_df, use_container_width=True)
 
-        # 各学期负担
-        loads = p.get("loads", {})
-        if loads:
-            load_df = pd.DataFrame([
-                {"学期": f"第{t}学期（大{['一','二','三','四'][(t-1)//2]}{'上' if t%2==1 else '下'}）", "学分": v}
-                for t, v in loads.items()
-            ])
-            st.markdown("**各学期负担**")
-            st.dataframe(load_df, use_container_width=True)
+    # 完整逐学期模板
+    st.markdown("**逐学期选课模板**")
+    for term, rows in p["timeline"].items():
+        total = sum(c["学分"] for c in rows)
+        required = [c for c in rows if c.get("性质") == "必修"]
+        elective = [c for c in rows if c.get("性质") == "选修"]
+        year = (term + 1) // 2
+        half = "上" if term % 2 == 1 else "下"
+        st.markdown(f"**第 {term} 学期（大{['一','二','三','四'][year-1]}{half}）** · {len(rows)} 门 / {total:.1f} 学分")
+        if required:
+            st.markdown("　必修：" + "、".join(f"{c['课程名称']}({c['学分']})" for c in required))
+        if elective:
+            st.markdown("　选修：" + "、".join(f"{c['课程名称']}({c['学分']})" for c in elective))
 
-        # 完整逐学期模板
-        with st.expander("查看完整逐学期选课模板", expanded=False):
-            for term, rows in p["timeline"].items():
-                total = sum(c["学分"] for c in rows)
-                required = [c for c in rows if c.get("性质") == "必修"]
-                elective = [c for c in rows if c.get("性质") == "选修"]
-                year = (term + 1) // 2
-                half = "上" if term % 2 == 1 else "下"
-                st.markdown(f"**第 {term} 学期（大{['一','二','三','四'][year-1]}{half}）** · {len(rows)} 门 / {total:.1f} 学分")
-                if required:
-                    st.markdown("　必修：" + "、".join(f"{c['课程名称']}({c['学分']})" for c in required))
-                if elective:
-                    st.markdown("　选修：" + "、" .join(f"{c['课程名称']}({c['学分']})" for c in elective))
-        st.divider()
+    # 导出 Excel
+    try:
+        st.download_button("⬇️ 下载选课表（Excel）", data=_plan_to_excel(p["timeline"]),
+                           file_name="选课规划.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           use_container_width=True)
+    except Exception:
+        pass
 
-    st.info("💡 以上方案在「选修课选择策略」上不同。必修课固定在开课学期；如需按某学期更多选修，请从该学期实际开设的选修中选择。可结合自身能力、兴趣调整。")
+    # 末尾：定制化提示（不一次性输出所有方案）
+    st.info("💡 以上是为你生成的默认方案。**如需其他定制**（如「提前集中修完」「某学期减负」「对比不同方案」），"
+            "可以直接告诉我，我会针对性重新生成。")
+
+
+def _plan_to_excel(timeline: dict) -> bytes:
+    """把选课时间轴导出为 Excel 字节。"""
+    import io
+    rows = []
+    for t in sorted(timeline):
+        for c in timeline[t]:
+            rows.append({"学期": f"第 {t} 学期", "课程名称": c.get("课程名称", ""),
+                         "类别": c.get("类别", ""), "学分": c.get("学分", ""), "性质": c.get("性质", "")})
+    df = pd.DataFrame(rows)
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="选课规划")
+    return buf.getvalue()
 
 
 def _render_review(review: dict) -> None:

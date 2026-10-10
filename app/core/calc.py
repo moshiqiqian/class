@@ -444,3 +444,87 @@ def build_career_plan(profile: dict, curriculum: dict) -> dict:
         "warnings": [],
         "note": multi["note"],
     }
+
+
+def compare_career_plans(profile: dict, curriculum: dict) -> dict:
+    """生成两套生涯方案的并排对比数据。"""
+    multi = build_career_plans(profile, curriculum)
+    plans = multi["plans"]
+    # 并排对比：每学期在两套方案下的学分
+    rows = []
+    all_terms = sorted(set().union(*[set(p["loads"].keys()) for p in plans]))
+    for t in all_terms:
+        row = {"学期": f"第{t}学期"}
+        for p in plans:
+            row[p["name"]] = p["loads"].get(t, 0)
+        rows.append(row)
+    return {
+        "mode": "compare",
+        "plans": plans,
+        "table": rows,
+        "current_semester": multi["current_semester"],
+        "note": multi["note"],
+    }
+
+
+def check_graduation(profile: dict, curriculum: dict) -> dict:
+    """毕业达标检查：各平台学分 + 总学分 + 必修覆盖 + 结论。"""
+    requirements = curriculum.get("credit_requirements", {})
+    earned = profile.get("completed_credits", {})
+    completed = set(profile.get("completed_courses", []))
+
+    platforms = {}
+    for name, req in requirements.items():
+        if name == "毕业总学分":
+            continue
+        e = float(earned.get(name, 0))
+        platforms[name] = {"required": float(req), "earned": e, "missing": max(0.0, float(req) - e), "ok": e >= float(req)}
+
+    total_required = requirements.get("毕业总学分")
+    total_earned = sum(float(v) for v in earned.values())
+    total_ok = (total_earned >= float(total_required)) if total_required else None
+
+    # 必修课覆盖（培养方案必修 但未修）
+    missing_required = [
+        c["name"] for c in curriculum.get("courses", [])
+        if c.get("required", True) and c["name"] not in completed
+    ]
+    missing_sems = profile.get("missing_semesters", [])
+
+    not_ok = [name for name, p in platforms.items() if not p["ok"]]
+    can_graduate = bool(total_ok and not not_ok and not missing_required and not missing_sems)
+
+    if can_graduate:
+        conclusion = "✅ 已满足毕业要求，可正常毕业。"
+    else:
+        parts = []
+        if total_required and total_earned < float(total_required):
+            parts.append(f"总学分还差 {float(total_required) - total_earned:.1f}")
+        if not_ok:
+            parts.append("平台未达标：" + "、".join(not_ok))
+        if missing_required:
+            parts.append(f"还有 {len(missing_required)} 门必修未修")
+        if missing_sems:
+            parts.append(f"缺 {len(missing_sems)} 个学期成绩单")
+        conclusion = "⚠️ 尚未达标：" + "；".join(parts) + "。"
+
+    return {
+        "platforms": platforms,
+        "total_required": total_required,
+        "total_earned": round(total_earned, 1),
+        "total_ok": total_ok,
+        "missing_required": missing_required,
+        "missing_semesters": missing_sems,
+        "conclusion": conclusion,
+        "can_graduate": can_graduate,
+    }
+
+
+def detect_load_issues(timeline: dict, max_credits: float = 26.0) -> list[str]:
+    """学期负担检测：某学期学分过载时提示（替代无课表数据下的时间冲突检测）。"""
+    issues = []
+    for t, rows in timeline.items():
+        total = sum(c.get("学分", 0) for c in rows)
+        if total > max_credits:
+            issues.append(f"第 {t} 学期共 {total:.1f} 学分，超过建议上限 {max_credits:.0f}，负担偏重。")
+    return issues
