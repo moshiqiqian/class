@@ -367,25 +367,24 @@ def build_career_plans(profile: dict, curriculum: dict) -> dict:
 
 
 def _career_plan(required: list[dict], electives: list[dict], requirements: dict, earned: dict, completed: set, strategy: str) -> dict:
-    """生成一套生涯方案。strategy: balanced=均衡 / early=提前集中。"""
+    """生成一套生涯方案。展示全部课程（含大一到大四，标记已修）；选修按缺口分布。"""
     timeline: dict[int, list[dict]] = {s: [] for s in range(1, 9)}   # 学生需自选的课
     school: dict[int, list[dict]] = {s: [] for s in range(1, 9)}     # 学校安排的必修
 
-    # 必修分类：通识必修（需选）/ 其他必修（学校安排）
+    # 必修：全部按开课学期展示（含大一），标记已修/需选/学校安排
     for c in required:
         term = max(1, min(8, int(c.get("semester", 1))))
         cat = c.get("category", c.get("platform", ""))
         row = _course_row(c)
+        done = c["name"] in completed
         if "通识必修" in cat:
-            if c["name"] in completed:
-                continue
-            row["状态"] = "通识必修"
+            row["状态"] = "✅ 已修" if done else "通识必修（需选）"
             timeline[term].append(row)
         else:
-            row["状态"] = "学校安排"
+            row["状态"] = "✅ 已修" if done else "学校安排"
             school[term].append(row)
 
-    # 选修：仅在该平台有缺口时挑选
+    # 选修：仅在该平台有缺口时挑选，分布到剩余学期
     for platform, req in requirements.items():
         if platform == "毕业总学分" or "选修" not in platform:
             continue
@@ -423,14 +422,27 @@ def _career_plan(required: list[dict], electives: list[dict], requirements: dict
     result_timeline = {t: rows for t, rows in timeline.items() if rows}
     result_school = {t: rows for t, rows in school.items() if rows}
 
-    # 每学期负担（含自选 + 学校安排），覆盖 1-8 学期
+    # 每学期负担（覆盖 1-8 学期）
     loads = {}
     for t in range(1, 9):
-        elective_credits = sum(c["学分"] for c in result_timeline.get(t, []))
-        school_credits = sum(c["学分"] for c in result_school.get(t, []))
-        if elective_credits or school_credits:
-            loads[t] = {"自选": round(elective_credits, 1), "学校安排": round(school_credits, 1),
-                        "合计": round(elective_credits + school_credits, 1)}
+        need = sum(c["学分"] for c in result_timeline.get(t, []) if c.get("状态") == "建议选修")
+        req_sel = sum(c["学分"] for c in result_timeline.get(t, []) if c.get("状态") != "建议选修" and c.get("状态") != "✅ 已修")
+        school_credits = sum(c["学分"] for c in result_school.get(t, []) if c.get("状态") != "✅ 已修")
+        done = sum(c["学分"] for c in result_timeline.get(t, []) + result_school.get(t, []) if c.get("状态") == "✅ 已修")
+        if need or req_sel or school_credits or done:
+            loads[t] = {"需自选": round(need + req_sel, 1), "学校安排": round(school_credits, 1),
+                        "合计": round(need + req_sel + school_credits + done, 1)}
+
+    # 选修课分布建议：某平台剩余缺口 / 剩余学期
+    elective_advice = {}
+    if earned is not None:
+        remaining_terms = [t for t in range(1, 9) if t >= 1]
+        for platform, req in requirements.items():
+            if platform == "毕业总学分" or "选修" not in platform:
+                continue
+            gap = max(0.0, float(req) - float(earned.get(platform, 0)))
+            if gap > 0:
+                elective_advice[platform] = round(gap, 1)
 
     names = {"balanced": "稳妥均衡型", "early": "提前集中型"}
     descs = {
@@ -444,6 +456,7 @@ def _career_plan(required: list[dict], electives: list[dict], requirements: dict
         "timeline": result_timeline,
         "school": result_school,
         "loads": loads,
+        "elective_gap": elective_advice,
         "total_planned": round(sum(v["合计"] for v in loads.values()), 1),
     }
 

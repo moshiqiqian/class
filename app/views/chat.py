@@ -55,25 +55,19 @@ def render() -> None:
 
 
 def _render_sidebar(profile: dict) -> None:
-    """左侧固定栏：工作区信息 + 视图切换。"""
+    """左侧固定栏：工作区信息 + 视图切换 + 工作区管理入口。"""
     st.markdown(f"**🎓 {profile['major']}**")
     st.caption(f"{profile['college']} · 第 {profile['current_semester']} 学期")
-
-    from app.core.workspace import list_workspaces, load_into_session
-    workspaces = list_workspaces()
-    if workspaces:
-        names = [w["name"] for w in workspaces]
-        current = st.session_state.get("current_workspace", "")
-        idx = names.index(current) if current in names else 0
-        st.markdown("**工作区**")
-        selected = st.selectbox("切换工作区", names, index=idx, key="chat_ws_switch", label_visibility="collapsed")
-        if st.button("切换", use_container_width=True):
-            if selected != current and load_into_session(selected):
-                st.rerun()
 
     st.divider()
     st.markdown("**功能**")
     st.radio("功能导航", ("💬 对话", "📊 成绩信息", "⚙️ 修改信息"), key="chat_page", label_visibility="collapsed")
+
+    st.divider()
+    st.caption(f"当前工作区：{st.session_state.get('current_workspace', '—')}")
+    if st.button("🗂️ 管理工作区", use_container_width=True):
+        st.session_state.manage_page = True
+        st.rerun()
 
 
 def _render_chat(profile: dict, curriculum: dict) -> None:
@@ -332,10 +326,16 @@ def _render_career_plan(plan: dict) -> None:
         st.markdown("**各学期负担**")
         load_df = pd.DataFrame([
             {"学期": f"第{t}学期（大{['一','二','三','四'][(t-1)//2]}{'上' if t%2==1 else '下'}）",
-             "自选学分": v.get("自选", 0), "学校安排学分": v.get("学校安排", 0), "合计": v.get("合计", 0)}
-            for t, v in loads.items()
+             "需自选学分": v.get("需自选", 0), "学校安排学分": v.get("学校安排", 0), "合计": v.get("合计", 0)}
+            for t, v in sorted(loads.items())
         ])
         st.dataframe(load_df, use_container_width=True)
+
+    # 选修课缺口与建议
+    eg = p.get("elective_gap", {})
+    if eg:
+        st.markdown("**选修课还需修读**：" + "、".join(f"{k} {v} 学分" for k, v in eg.items()))
+        st.caption("建议把选修分散到剩余学期，每学期 1~2 门，避免集中在大四。")
 
     # 逐学期模板
     st.markdown("**逐学期选课模板**")

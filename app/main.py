@@ -3,12 +3,17 @@ from __future__ import annotations
 import streamlit as st
 
 from app.state import initialize
-from app.views import chat, credits, profile, upload
+from app.views import chat, credits, manage, profile, upload
 
 
 def main() -> None:
     st.set_page_config(page_title="培养方案智能问答与选课规划", page_icon="🎓", layout="wide")
     initialize()
+
+    # 工作区管理页（独立二级页面）
+    if st.session_state.get("manage_page"):
+        manage.render()
+        return
 
     # 阶段 4 是独立的对话页面，不显示向导导航
     if st.session_state.stage == 4:

@@ -30,6 +30,7 @@ DEFAULTS: dict[str, object] = {
     "workspace_panel": False,            # 工作区管理面板是否打开
     "new_workspace": False,              # 新建工作区弹窗是否打开
     "new_ws_dialog": False,              # 新建工作区对话框
+    "manage_page": False,                # 是否打开工作区管理页
 }
 
 
