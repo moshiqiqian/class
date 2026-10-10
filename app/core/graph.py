@@ -293,17 +293,16 @@ def _answer_node(state: GraphState) -> dict[str, Any]:
             lines.append(f"- {r['course']}：{r.get('score')}分，{r.get('credits')}学分，第{r.get('semester')}学期，绩点{r.get('gpa')}")
         context_parts.append("\n".join(lines))
 
-    # 3. 培养方案原文（课程表、培养目标等）
-    full_text = curriculum.get("raw_text", "")
-    if full_text:
-        context_parts.append("【培养方案原文】\n" + full_text)
-
-    # 若原文缺失，向量检索兜底
-    if not full_text:
-        from app.core.rag import retrieve_sections
-        sections = retrieve_sections(question)
-        if sections:
-            context_parts.append("【检索资料】\n" + "\n\n".join(f"【{s['title']}】\n{s['content']}" for s in sections))
+    # 3. RAG 检索：定位相关章节（优先）
+    from app.core.rag import retrieve_sections
+    sections = retrieve_sections(question)
+    if sections:
+        context_parts.append("【检索到的培养方案章节】\n" + "\n\n".join(f"【{s['title']}】\n{s['content']}" for s in sections))
+    else:
+        # 兜底：检索为空时用完整原文
+        full_text = curriculum.get("raw_text", "")
+        if full_text:
+            context_parts.append("【培养方案原文】\n" + full_text)
 
     context = "\n\n".join(context_parts)
     if not context.strip():
